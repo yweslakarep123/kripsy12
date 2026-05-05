@@ -183,9 +183,9 @@ class MultiStepWrapper(gym.Wrapper):
         self.done = list()
         self.info = defaultdict(lambda : deque(maxlen=n_obs_steps+1))
     
-    def reset(self):
-        """Resets the environment using kwargs."""
-        ret = super().reset()
+    def reset(self, **kwargs):
+        """Reset; kwargs (mis. seed, options) diteruskan ke lingkungan dalam."""
+        ret = super().reset(**kwargs)
         obs = ret[0] if isinstance(ret, tuple) else ret
 
         self.obs = deque([obs], maxlen=self.n_obs_steps+1)

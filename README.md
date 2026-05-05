@@ -6,14 +6,22 @@ Struktur repositori:
 
 ```text
 FlowPolicy/                 # root Git (repo ini)
+├── scripts/                # orkestrator eksperimen (baseline + random search + CV)
+│   ├── run_experiment.py
+│   ├── cv_splits.py
+│   ├── summarize.py
+│   ├── plot_results.py
+│   └── experiment_constants.py
 └── FlowPolicy/             # kode Python, train.py, paket flow_policy_3d
     ├── train.py
+    ├── infer_kitchen.py
     ├── setup.py
     ├── requirements-franka-kitchen.txt
     └── flow_policy_3d/
 ```
 
-Semua perintah di bawah diasumsikan dijalankan dari direktori **`FlowPolicy/FlowPolicy`** (folder yang berisi `train.py`).
+- Perintah **training tunggal** (`train.py`): dari **`FlowPolicy/FlowPolicy`**.
+- **Pipeline eksperimen** (`scripts/run_experiment.py`): dari **akar repo** (`FlowPolicy/`, induk dari folder `FlowPolicy/` yang berisi `train.py`).
 
 ## Prasyarat
 
@@ -87,6 +95,95 @@ Override umum lain:
 | `logging.mode=offline` | W&B tanpa upload (berguna di mesin tanpa kredensial). |
 
 Checkpoint dan log Hydra biasanya di bawah `FlowPolicy/FlowPolicy/data/outputs/`.
+
+## Pipeline eksperimen (baseline + random search + CV)
+
+Skrip **`scripts/run_experiment.py`** mengorkestrasi:
+
+1. **Baseline** — hyperparameter default FlowPolicy (`experiment_constants.DEFAULT_BASELINE_HPARAMS`) untuk tiap kombinasi **seed × preprocessing × lipatan CV**.
+2. **Random search** — konfigurasi yang disampling sekali (disimpan di `configs.json`), dipakai bersama untuk semua seed dan profil preprocessing.
+
+Preprocessing: **`standard`** (noise observasi) dan **`minimal`** (tanpa augmentasi). Tiap run punya folder sendiri di bawah `runs/`.
+
+### Menjalankan dari akar repositori
+
+```bash
+cd FlowPolicy    # folder yang berisi scripts/ dan subfolder FlowPolicy/
+python scripts/run_experiment.py \
+  --output-dir outputs/experiment \
+  --zarr-path data/kitchen_complete_from_minari.zarr
+```
+
+Argumen `--zarr-path` bersifat **relatif terhadap `FlowPolicy/FlowPolicy`** (tempat `train.py`). Sesuaikan jika dataset Anda di lokasi lain (mis. path absolut).
+
+### Opsi CLI yang sering dipakai
+
+| Argumen | Default | Keterangan |
+|---------|---------|------------|
+| `--seeds` | `0 42 101` | Tiga seed untuk inisialisasi / shuffle / inferensi |
+| `--profiles` | `standard minimal` | Profil dataset (dengan / tanpa noise observasi) |
+| `--n-configs` | `10` | Jumlah kombinasi hyperparameter random search |
+| `--n-folds` | `5` | Lipatan CV pada level episode |
+| `--sampling-seed` | `99` | Seed untuk sampling random search (reproducible `configs.json`) |
+| `--cv-seed` | `12345` | Seed pembagian episode train/val/test |
+| `--n-infer-episodes` | `50` | Episode evaluasi setelah training |
+| `--output-dir` | `outputs/experiment` | Relatif terhadap akar repo |
+| `--max-batch-size` | `128` | **Plafon** batch train/val (turunkan jika VRAM ~16 GB kewalahan, mis. `96` atau `64`) |
+| `--dataloader-num-workers` | `4` | Workers DataLoader (turunkan jika RAM host penuh) |
+| `--checkpoint-every` | `200` | Simpan checkpoint berkala agar bisa dilanjut setelah mesin mati |
+
+Contoh untuk GPU **VRAM ~16 GB**:
+
+```bash
+python scripts/run_experiment.py \
+  --output-dir outputs/experiment \
+  --zarr-path data/kitchen_complete_from_minari.zarr \
+  --max-batch-size 96 \
+  --dataloader-num-workers 4
+```
+
+### Keluaran
+
+Di `--output-dir` (mis. `outputs/experiment/`):
+
+- `configs.json` — baseline + daftar konfigurasi random search (`version: 2`).
+- `cv_splits.json` — definisi lipatan episode.
+- `results.csv` — satu baris per run (hyperparameter + metrik + `status`).
+- `runs/<nama_run>/` — Hydra output, `checkpoints/`, `metrics.json`, `training_final.json`.
+- `summary.csv`, `plots/*.png` dan `*.pdf` — dibuat otomatis di akhir (`summarize.py`, `plot_results.py`).
+
+Nama folder baseline: `baseline_seed<seed>_<profile>_fold<f>`; random search: `cfg<idx>_seed<seed>_<profile>_fold<f>`.
+
+### Resume setelah mesin mati
+
+Run **dilewati** jika sudah selesai: ada **`metrics.json`** di folder run, atau **`results.csv`** sudah punya baris dengan kombinasi yang sama dan **`status=ok`**.
+
+- Training terputus (ada **`latest.ckpt`**, belum ada **`training_final.json`**) → training **dilanjutkan** (`training.resume=true`).
+- Training selesai (**`training_final.json`** + ckpt) tetapi inferensi belum → hanya **`infer_kitchen.py`** yang dijalankan.
+
+Konfigurasi tiap job dicetak ke **terminal** sebelum `train` / `infer`.
+
+### Inferensi manual (checkpoint tunggal)
+
+Dari **`FlowPolicy/FlowPolicy`**:
+
+```bash
+python infer_kitchen.py \
+  --checkpoint path/ke/checkpoints/latest.ckpt \
+  --metrics-json path/ke/metrics.json \
+  --n-infer-episodes 50 \
+  --seed 42 \
+  --warmup-steps 20
+```
+
+### Agregasi / plot saja (tanpa train ulang)
+
+```bash
+python scripts/summarize.py --output-dir outputs/experiment
+python scripts/plot_results.py --output-dir outputs/experiment
+```
+
+(`--output-dir` relatif terhadap akar repo.)
 
 ## Menjalankan di [Vast.ai](https://vast.ai/)
 

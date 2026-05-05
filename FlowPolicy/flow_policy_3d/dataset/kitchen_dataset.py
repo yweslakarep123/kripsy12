@@ -1,9 +1,10 @@
-from typing import Dict
+from typing import Dict, List, Optional
 import os
 import pathlib
 import torch
 import numpy as np
 import copy
+from omegaconf import OmegaConf
 from flow_policy_3d.common.pytorch_util import dict_apply
 from flow_policy_3d.common.replay_buffer import ReplayBuffer
 from flow_policy_3d.common.sampler import (
@@ -42,6 +43,10 @@ class KitchenDataset(BaseDataset):
         seed=42,
         val_ratio=0.0,
         max_train_episodes=None,
+        train_episode_indices: Optional[List[int]] = None,
+        val_episode_indices: Optional[List[int]] = None,
+        preprocessing_profile: str = "minimal",
+        obs_noise_std: Optional[float] = None,
     ):
         super().__init__()
         if zarr_path is None:
@@ -69,15 +74,62 @@ class KitchenDataset(BaseDataset):
         self.replay_buffer = ReplayBuffer.copy_from_path(
             zarr_path, keys=["state", "action", "point_cloud"]
         )
-        val_mask = get_val_mask(
-            n_episodes=self.replay_buffer.n_episodes,
-            val_ratio=val_ratio,
-            seed=seed,
-        )
-        train_mask = ~val_mask
-        train_mask = downsample_mask(
-            mask=train_mask, max_n=max_train_episodes, seed=seed
-        )
+        n_eps = self.replay_buffer.n_episodes
+        self._explicit_val_indices: Optional[List[int]] = None
+        profile = (preprocessing_profile or "minimal").lower()
+        if profile == "standard":
+            self._obs_noise_std = 0.01 if obs_noise_std is None else float(obs_noise_std)
+        elif profile == "minimal":
+            self._obs_noise_std = float(obs_noise_std) if obs_noise_std is not None else 0.0
+        else:
+            raise ValueError(
+                "KitchenDataset: preprocessing_profile harus 'standard' atau 'minimal', "
+                f"dapat {preprocessing_profile!r}"
+            )
+
+        if train_episode_indices is not None:
+            if OmegaConf.is_config(train_episode_indices):
+                train_episode_indices = list(
+                    OmegaConf.to_container(train_episode_indices, resolve=True)
+                )
+            if OmegaConf.is_config(val_episode_indices):
+                val_episode_indices = list(
+                    OmegaConf.to_container(val_episode_indices, resolve=True)
+                )
+            if val_episode_indices is None:
+                raise ValueError(
+                    "KitchenDataset: val_episode_indices wajib diisi jika "
+                    "train_episode_indices dipakai (split CV eksplisit)."
+                )
+            train_mask = np.zeros(n_eps, dtype=bool)
+            for i in train_episode_indices:
+                if i < 0 or i >= n_eps:
+                    raise ValueError(
+                        f"KitchenDataset: indeks episode latih tidak valid: {i} "
+                        f"(jumlah episode dalam zarr: {n_eps})"
+                    )
+                train_mask[i] = True
+            for i in val_episode_indices:
+                if i < 0 or i >= n_eps:
+                    raise ValueError(
+                        f"KitchenDataset: indeks episode validasi tidak valid: {i}"
+                    )
+                if train_mask[i]:
+                    raise ValueError(
+                        "KitchenDataset: episode tidak boleh masuk train dan val sekaligus "
+                        f"(episode {i})."
+                    )
+            self._explicit_val_indices = list(val_episode_indices)
+        else:
+            val_mask = get_val_mask(
+                n_episodes=n_eps,
+                val_ratio=val_ratio,
+                seed=seed,
+            )
+            train_mask = ~val_mask
+            train_mask = downsample_mask(
+                mask=train_mask, max_n=max_train_episodes, seed=seed
+            )
 
         self.sampler = SequenceSampler(
             replay_buffer=self.replay_buffer,
@@ -93,14 +145,20 @@ class KitchenDataset(BaseDataset):
 
     def get_validation_dataset(self):
         val_set = copy.copy(self)
+        if self._explicit_val_indices is not None:
+            val_mask = np.zeros(self.replay_buffer.n_episodes, dtype=bool)
+            val_mask[self._explicit_val_indices] = True
+        else:
+            val_mask = ~self.train_mask
         val_set.sampler = SequenceSampler(
             replay_buffer=self.replay_buffer,
             sequence_length=self.horizon,
             pad_before=self.pad_before,
             pad_after=self.pad_after,
-            episode_mask=~self.train_mask,
+            episode_mask=val_mask,
         )
-        val_set.train_mask = ~self.train_mask
+        val_set.train_mask = val_mask
+        val_set._obs_noise_std = 0.0
         return val_set
 
     def get_normalizer(self, mode="limits", **kwargs):
@@ -133,4 +191,13 @@ class KitchenDataset(BaseDataset):
         sample = self.sampler.sample_sequence(idx)
         data = self._sample_to_data(sample)
         torch_data = dict_apply(data, torch.from_numpy)
+        if self._obs_noise_std > 0:
+            std = self._obs_noise_std
+            ap = torch_data["obs"]["agent_pos"]
+            torch_data["obs"]["agent_pos"] = ap + torch.randn_like(ap) * std
+            pc = torch_data["obs"]["point_cloud"]
+            torch_data["obs"]["point_cloud"] = pc.clone()
+            torch_data["obs"]["point_cloud"][..., :3] = (
+                pc[..., :3] + torch.randn_like(pc[..., :3]) * std
+            )
         return torch_data

@@ -40,6 +40,52 @@ warnings.filterwarnings("ignore")
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
+# #region agent log
+_DEBUG_LOG_9A4D02 = "/home/daffa/Documents/FlowPolicy/.cursor/debug-9a4d02.log"
+
+
+def _dbg_9a4d02(hypothesis_id, location, message, data=None):
+    try:
+        payload = {
+            "sessionId": "9a4d02",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(_DEBUG_LOG_9A4D02, "a") as f:
+            f.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+
+
+_train_py_root = pathlib.Path(__file__).resolve().parent
+_fp_yaml_path = _train_py_root / "flow_policy_3d/config/flowpolicy.yaml"
+try:
+    _raw_flowpolicy = OmegaConf.load(_fp_yaml_path)
+    _pol_node = _raw_flowpolicy.get("policy") or {}
+    _pol_key_list = list(_pol_node.keys()) if hasattr(_pol_node, "keys") else []
+    _dbg_9a4d02(
+        "B",
+        "train.py:import",
+        "flowpolicy.yaml policy keys (pre-hydra)",
+        {
+            "policy_keys": _pol_key_list,
+            "has_policy_Conditional_ConsistencyFM": "Conditional_ConsistencyFM"
+            in _pol_key_list,
+            "flowpolicy_yaml": str(_fp_yaml_path),
+        },
+    )
+except Exception as _e:
+    _dbg_9a4d02(
+        "B",
+        "train.py:import",
+        "flowpolicy.yaml load failed",
+        {"error": str(_e)[:240]},
+    )
+# #endregion
+
 _AGENT_DEBUG_LOG = "/home/daffa/Documents/FlowPolicy/.cursor/debug-74ea2d.log"
 _AGENT_DEBUG_SESSION = "74ea2d"
 
@@ -143,7 +189,9 @@ class TrainFlowPolicyWorkspace:
             RUN_CKPT = True
             verbose = False
         
-        RUN_VALIDATION = False # reduce time cost
+        RUN_VALIDATION = bool(
+            OmegaConf.select(cfg, "training.compute_val_loss", default=False)
+        )
         
         # resume training
         if cfg.training.resume:
@@ -269,6 +317,8 @@ class TrainFlowPolicyWorkspace:
         # save batch for sampling
         train_sampling_batch = None
 
+        last_epoch_train_loss = None
+        last_epoch_val_loss = None
 
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
@@ -338,6 +388,7 @@ class TrainFlowPolicyWorkspace:
             # replace train_loss with epoch average
             train_loss = np.mean(train_losses)
             step_log['train_loss'] = train_loss
+            last_epoch_train_loss = float(train_loss)
 
             # ========= eval for this epoch ==========
             policy = self.model
@@ -374,6 +425,7 @@ class TrainFlowPolicyWorkspace:
                         val_loss = torch.mean(torch.tensor(val_losses)).item()
                         # log epoch average validation loss
                         step_log['val_loss'] = val_loss
+                        last_epoch_val_loss = float(val_loss)
 
             # run diffusion sampling on a training batch
             if (self.epoch % cfg.training.sample_every) == 0:
@@ -427,6 +479,21 @@ class TrainFlowPolicyWorkspace:
             self.global_step += 1
             self.epoch += 1
             del step_log
+
+        try:
+            wandb_run.finish()
+        except Exception:
+            pass
+
+        final_metrics = {
+            "train_loss_final": last_epoch_train_loss,
+            "val_loss_final": last_epoch_val_loss,
+        }
+        with open(os.path.join(self.output_dir, "training_final.json"), "w") as f:
+            json.dump(final_metrics, f, indent=2)
+
+        if RUN_CKPT and cfg.checkpoint.save_last_ckpt:
+            self.save_checkpoint()
 
     def eval(self):
         # load the latest checkpoint
@@ -599,4 +666,12 @@ def main(cfg):
     workspace.run()
 
 if __name__ == "__main__":
+    # #region agent log
+    _dbg_9a4d02(
+        "D",
+        "train.py:__main__",
+        "argv before hydra compose",
+        {"argv": sys.argv},
+    )
+    # #endregion
     main()

@@ -163,3 +163,4 @@ xyzservices==2026.3.0
 zarr==2.18.3
 zipp==3.23.1
 pip install pytorch3d -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt211/download.html
+pip install wandb[media]

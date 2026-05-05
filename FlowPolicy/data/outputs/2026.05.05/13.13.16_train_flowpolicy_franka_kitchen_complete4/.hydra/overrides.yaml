@@ -1,4 +1,0 @@
-- task=franka_kitchen_complete4
-- task.dataset.zarr_path=FlowPolicy/data/kitchen_complete_from_minari.zarr
-- training.debug=true
-- training.num_epochs=1

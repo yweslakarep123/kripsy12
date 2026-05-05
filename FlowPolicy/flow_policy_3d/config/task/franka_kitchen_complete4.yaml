@@ -41,3 +41,7 @@ dataset:
   seed: 42
   val_ratio: 0.02
   max_train_episodes: null
+  train_episode_indices: null
+  val_episode_indices: null
+  preprocessing_profile: minimal
+  obs_noise_std: null

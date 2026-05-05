@@ -16,6 +16,15 @@ from termcolor import cprint
 
 
 class KitchenRunner(BaseRunner):
+    """Urutan sub-tugas untuk metrik success_rate_k1…k4 (Kitchen-Complete)."""
+
+    K_LEVEL_SPECS = (
+        frozenset({"microwave"}),
+        frozenset({"microwave", "light switch"}),
+        frozenset({"microwave", "light switch", "kettle"}),
+        frozenset({"microwave", "light switch", "kettle", "slide cabinet"}),
+    )
+
     def __init__(
         self,
         output_dir,
@@ -72,6 +81,137 @@ class KitchenRunner(BaseRunner):
 
         self.logger_util_test = logger_util.LargestKRecorder(K=3)
         self.logger_util_test10 = logger_util.LargestKRecorder(K=5)
+
+    @staticmethod
+    def _completion_set_from_info(info: dict) -> set:
+        """Gabungkan semua task yang tercatat di riwayat obs langkah terakhir."""
+        raw = info.get("episode_task_completions")
+        if raw is None:
+            return set()
+        if isinstance(raw, np.ndarray):
+            seq = raw.ravel().tolist()
+        elif isinstance(raw, (list, tuple)):
+            seq = list(raw)
+        else:
+            seq = [raw]
+        merged = set()
+        for item in seq:
+            if item is None:
+                continue
+            if isinstance(item, str):
+                merged.add(item)
+            elif isinstance(item, (list, tuple, set)):
+                merged.update(str(x) for x in item)
+            elif isinstance(item, np.ndarray):
+                merged.update(str(x) for x in item.tolist())
+            else:
+                merged.add(str(item))
+        return merged
+
+    def run_eval_metrics(
+        self,
+        policy: BasePolicy,
+        *,
+        warmup_predict_steps: int = 20,
+        eval_seed: int = 0,
+        log_video: bool = False,
+    ):
+        """
+        Evaluasi dengan warmup GPU, latensi per langkah predict_action, dan success k1–k4.
+        Tidak mengandalkan W&B kecuali log_video=True (video terakhir).
+        """
+        device = policy.device
+        env = self.env
+        latencies_ms = []
+
+        def predict_timed(obs_dict_input):
+            with torch.no_grad():
+                t0 = time.perf_counter()
+                action_dict = policy.predict_action(obs_dict_input)
+                t1 = time.perf_counter()
+            latencies_ms.append((t1 - t0) * 1000.0)
+            return action_dict
+
+        obs = env.reset(seed=eval_seed)
+        policy.reset()
+        np_obs_dict = dict(obs)
+        obs_dict = dict_apply(
+            np_obs_dict, lambda x: torch.from_numpy(x).to(device=device)
+        )
+        obs_dict_input = {
+            "point_cloud": obs_dict["point_cloud"].unsqueeze(0),
+            "agent_pos": obs_dict["agent_pos"].unsqueeze(0),
+        }
+        for _ in range(max(0, warmup_predict_steps)):
+            predict_timed(obs_dict_input)
+
+        latencies_ms.clear()
+
+        ep_success_levels = []
+
+        for episode_idx in tqdm.tqdm(
+            range(self.eval_episodes),
+            desc=f"EvalMetrics FrankaKitchen {self.task_name}",
+            leave=False,
+            mininterval=self.tqdm_interval_sec,
+        ):
+            obs = env.reset(seed=int(eval_seed + episode_idx))
+            policy.reset()
+
+            done = False
+            last_completions = set()
+            while not done:
+                np_obs_dict = dict(obs)
+                obs_dict = dict_apply(
+                    np_obs_dict, lambda x: torch.from_numpy(x).to(device=device)
+                )
+                obs_dict_input = {
+                    "point_cloud": obs_dict["point_cloud"].unsqueeze(0),
+                    "agent_pos": obs_dict["agent_pos"].unsqueeze(0),
+                }
+                action_dict = predict_timed(obs_dict_input)
+                np_action_dict = dict_apply(
+                    action_dict, lambda x: x.detach().to("cpu").numpy()
+                )
+                action = np_action_dict["action"].squeeze(0)
+
+                obs, reward, done, info = env.step(action)
+                done = np.all(done)
+                last_completions |= self._completion_set_from_info(info)
+
+            levels_met = [
+                spec.issubset(last_completions) for spec in self.K_LEVEL_SPECS
+            ]
+            ep_success_levels.append(levels_met)
+
+        sr = np.asarray(ep_success_levels, dtype=np.float64)
+        mean_lat = float(np.mean(latencies_ms)) if latencies_ms else 0.0
+        std_lat = float(np.std(latencies_ms)) if latencies_ms else 0.0
+        out = {
+            "success_rate_k1": float(sr[:, 0].mean() * 100.0),
+            "success_rate_k2": float(sr[:, 1].mean() * 100.0),
+            "success_rate_k3": float(sr[:, 2].mean() * 100.0),
+            "success_rate_k4": float(sr[:, 3].mean() * 100.0),
+            "mean_inference_latency_ms": mean_lat,
+            "std_inference_latency_ms": std_lat,
+            "n_infer_episodes": int(self.eval_episodes),
+        }
+        out["trade_off"] = (
+            float(out["success_rate_k4"] / mean_lat) if mean_lat > 1e-9 else 0.0
+        )
+
+        if log_video:
+            videos = env.env.get_video()
+            if len(videos.shape) == 5:
+                videos = videos[:, 0]
+            out["sim_video_eval"] = wandb.Video(videos, fps=self.fps, format="mp4")
+
+        cprint(
+            f"[run_eval_metrics] k4={out['success_rate_k4']:.2f}% "
+            f"lat_ms={mean_lat:.3f}±{std_lat:.3f}",
+            "green",
+        )
+        return out
 
     def run(self, policy: BasePolicy):
         device = policy.device
