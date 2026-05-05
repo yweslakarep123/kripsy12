@@ -18,6 +18,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
@@ -62,9 +63,65 @@ def load_or_create_config_bundle(
     """Return (baseline_cfg, sampled_cfgs). Migrasi dari JSON array lama → objek {baseline, sampled}."""
     baseline = apply_vram_limits(baseline_config_dict(), max_batch)
 
+    raw: Any = None
     if configs_path.is_file():
-        with open(configs_path) as f:
-            raw = json.load(f)
+        text = configs_path.read_text(encoding="utf-8").strip()
+        if not text:
+            print("[warn] configs.json kosong; akan dibuat ulang dari baseline + random search.")
+            # #region agent log
+            try:
+                _log = REPO_ROOT / ".cursor" / "debug-9a4d02.log"
+                _log.parent.mkdir(parents=True, exist_ok=True)
+                with open(_log, "a", encoding="utf-8") as _lf:
+                    _lf.write(
+                        json.dumps(
+                            {
+                                "sessionId": "9a4d02",
+                                "hypothesisId": "A",
+                                "location": "run_experiment.py:load_or_create_config_bundle",
+                                "message": "configs.json empty file",
+                                "data": {"configs_path": str(configs_path)},
+                                "timestamp": int(time.time() * 1000),
+                            }
+                        )
+                        + "\n"
+                    )
+            except Exception:
+                pass
+            # #endregion
+        else:
+            try:
+                raw = json.loads(text)
+            except json.JSONDecodeError as e:
+                print(
+                    f"[warn] configs.json bukan JSON valid ({e}); akan dibuat ulang dari baseline + random search."
+                )
+                # #region agent log
+                try:
+                    _log = REPO_ROOT / ".cursor" / "debug-9a4d02.log"
+                    _log.parent.mkdir(parents=True, exist_ok=True)
+                    with open(_log, "a", encoding="utf-8") as _lf:
+                        _lf.write(
+                            json.dumps(
+                                {
+                                    "sessionId": "9a4d02",
+                                    "hypothesisId": "B",
+                                    "location": "run_experiment.py:load_or_create_config_bundle",
+                                    "message": "configs.json JSONDecodeError",
+                                    "data": {
+                                        "configs_path": str(configs_path),
+                                        "err": str(e)[:200],
+                                    },
+                                    "timestamp": int(time.time() * 1000),
+                                }
+                            )
+                            + "\n"
+                        )
+                except Exception:
+                    pass
+                # #endregion
+
+    if raw is not None:
         if isinstance(raw, list):
             sampled = [apply_vram_limits(dict(x), max_batch) for x in raw]
             bundle = {"version": 2, "baseline": baseline, "sampled": sampled}

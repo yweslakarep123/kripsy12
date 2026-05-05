@@ -446,11 +446,33 @@ class TrainFlowPolicyWorkspace:
                     del pred_action
                     del mse
 
-            if env_runner is None:
-                step_log['test_mean_score'] = - train_loss
-                
+            _mk_topk = OmegaConf.select(
+                cfg, "checkpoint.topk.monitor_key", default="test_mean_score"
+            )
+            if _mk_topk not in step_log:
+                step_log[_mk_topk] = -float(train_loss)
+
             # checkpoint
             if (self.epoch % cfg.training.checkpoint_every) == 0 and cfg.checkpoint.save_ckpt:
+                # #region agent log
+                _ro = int(cfg.training.rollout_every)
+                _dbg_9a4d02(
+                    "A",
+                    "train.py:before_topk_ckpt",
+                    "metric availability for TopKCheckpointManager",
+                    {
+                        "epoch": int(self.epoch),
+                        "rollout_every": _ro,
+                        "epoch_mod_rollout": int(self.epoch % _ro)
+                        if _ro > 0
+                        else -1,
+                        "env_runner_is_none": env_runner is None,
+                        "monitor_key": str(_mk_topk),
+                        "has_monitor_in_step_log": str(_mk_topk) in step_log,
+                        "has_test_mean_score": "test_mean_score" in step_log,
+                    },
+                )
+                # #endregion
                 # checkpointing
                 if cfg.checkpoint.save_last_ckpt:
                     self.save_checkpoint()
