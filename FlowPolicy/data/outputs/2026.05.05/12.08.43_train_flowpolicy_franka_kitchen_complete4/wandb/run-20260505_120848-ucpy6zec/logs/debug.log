@@ -1,0 +1,38 @@
+2026-05-05 12:08:48,376 INFO    MainThread:112411 [wandb_setup.py:_flush():81] Current SDK version is 0.26.1
+2026-05-05 12:08:48,376 INFO    MainThread:112411 [wandb_setup.py:_flush():81] Configure stats pid to 112411
+2026-05-05 12:08:48,376 INFO    MainThread:112411 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2026-05-05 12:08:48,376 INFO    MainThread:112411 [wandb_init.py:setup_run_log_directory():723] Logging user logs to /home/daffa/Documents/FlowPolicy/FlowPolicy/data/outputs/2026.05.05/12.08.43_train_flowpolicy_franka_kitchen_complete4/wandb/run-20260505_120848-ucpy6zec/logs/debug.log
+2026-05-05 12:08:48,376 INFO    MainThread:112411 [wandb_init.py:setup_run_log_directory():724] Logging internal logs to /home/daffa/Documents/FlowPolicy/FlowPolicy/data/outputs/2026.05.05/12.08.43_train_flowpolicy_franka_kitchen_complete4/wandb/run-20260505_120848-ucpy6zec/logs/debug-internal.log
+2026-05-05 12:08:48,376 INFO    MainThread:112411 [wandb_init.py:init():850] calling init triggers
+2026-05-05 12:08:48,376 INFO    MainThread:112411 [wandb_init.py:init():855] wandb.init called with sweep_config: {}
+config: {'task': {'name': 'franka_kitchen_complete4', 'task_name': 'train_flowpolicy', 'shape_meta': {'obs': {'point_cloud': {'shape': [512, 3], 'type': 'point_cloud'}, 'agent_pos': {'shape': [9], 'type': 'low_dim'}}, 'action': {'shape': [9]}}, 'env_runner': {'_target_': 'flow_policy_3d.env_runner.kitchen_runner.KitchenRunner', 'eval_episodes': 20, 'n_obs_steps': 2, 'n_action_steps': 4, 'fps': 12, 'n_envs': None, 'n_train': None, 'n_test': None, 'task_name': 'franka_kitchen_complete4', 'device': 'cuda:0', 'use_point_crop': True, 'max_steps': 280, 'tasks_to_complete': ['microwave', 'kettle', 'slide cabinet', 'light switch']}, 'dataset': {'_target_': 'flow_policy_3d.dataset.kitchen_dataset.KitchenDataset', 'zarr_path': 'FlowPolicy/data/kitchen_complete_from_minari.zarr', 'horizon': 4, 'pad_before': 1, 'pad_after': 3, 'seed': 42, 'val_ratio': 0.02, 'max_train_episodes': None}}, 'name': 'train_flowpolicy', 'task_name': 'franka_kitchen_complete4', 'shape_meta': {'obs': {'point_cloud': {'shape': [512, 3], 'type': 'point_cloud'}, 'agent_pos': {'shape': [9], 'type': 'low_dim'}}, 'action': {'shape': [9]}}, 'exp_name': 'debug', 'horizon': 4, 'n_obs_steps': 2, 'n_action_steps': 4, 'n_latency_steps': 0, 'dataset_obs_steps': 2, 'keypoint_visible_rate': 1.0, 'obs_as_global_cond': True, 'policy': {'_target_': 'flow_policy_3d.policy.flowpolicy.FlowPolicy', 'use_point_crop': True, 'condition_type': 'film', 'use_down_condition': True, 'use_mid_condition': True, 'use_up_condition': True, 'diffusion_step_embed_dim': 128, 'down_dims': [512, 1024, 2048], 'crop_shape': [84, 84], 'encoder_output_dim': 64, 'horizon': 4, 'kernel_size': 5, 'n_action_steps': 4, 'n_groups': 8, 'n_obs_steps': 2, 'obs_as_global_cond': True, 'shape_meta': {'obs': {'point_cloud': {'shape': [512, 3], 'type': 'point_cloud'}, 'agent_pos': {'shape': [9], 'type': 'low_dim'}}, 'action': {'shape': [9]}}, 'use_pc_color': False, 'pointnet_type': 'mlp', 'pointcloud_encoder_cfg': {'in_channels': 3, 'out_channels': 64, 'use_layernorm': True, 'final_norm': 'layernorm', 'normal_channel': False}}, 'ema': {'_target_': 'flow_policy_3d.model.flow.ema_model.EMAModel', 'update_after_step': 0, 'inv_gamma': 1.0, 'power': 0.75, 'min_value': 0.0, 'max_value': 0.9999}, 'dataloader': {'batch_size': 128, 'num_workers': 8, 'shuffle': True, 'pin_memory': True, 'persistent_workers': False}, 'val_dataloader': {'batch_size': 128, 'num_workers': 8, 'shuffle': False, 'pin_memory': True, 'persistent_workers': False}, 'optimizer': {'_target_': 'torch.optim.AdamW', 'lr': 0.0001, 'betas': [0.95, 0.999], 'eps': 1e-08, 'weight_decay': 1e-06}, 'training': {'device': 'cuda:0', 'seed': 42, 'debug': False, 'resume': True, 'lr_scheduler': 'cosine', 'lr_warmup_steps': 500, 'num_epochs': 3000, 'gradient_accumulate_every': 1, 'use_ema': True, 'rollout_every': 200, 'checkpoint_every': 200, 'val_every': 1, 'sample_every': 5, 'max_train_steps': None, 'max_val_steps': None, 'tqdm_interval_sec': 1.0, 'max_grad_norm': 1.0, 'ema_decay': 0.95}, 'logging': {'group': 'debug', 'id': None, 'mode': 'online', 'name': 'debug_42', 'project': 'flowpolicy', 'resume': True, 'tags': ['flowpolicy']}, 'checkpoint': {'save_ckpt': False, 'topk': {'monitor_key': 'test_mean_score', 'mode': 'max', 'k': 1, 'format_str': 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'}, 'save_last_ckpt': True, 'save_last_snapshot': False}, 'multi_run': {'run_dir': 'data/outputs/2026.05.05/12.08.43_train_flowpolicy_franka_kitchen_complete4', 'wandb_name_base': '2026.05.05-12.08.47_train_flowpolicy_franka_kitchen_complete4'}, '_wandb': {}}
+2026-05-05 12:08:48,376 INFO    MainThread:112411 [wandb_init.py:init():898] starting backend
+2026-05-05 12:08:48,591 INFO    MainThread:112411 [wandb_init.py:init():913] sending inform_init request
+2026-05-05 12:08:49,345 INFO    MainThread:112411 [wandb_init.py:init():918] backend started and connected
+2026-05-05 12:08:49,347 INFO    MainThread:112411 [wandb_init.py:init():988] updated telemetry
+2026-05-05 12:08:49,351 INFO    MainThread:112411 [wandb_init.py:init():1011] communicating run to backend with 90.0 second timeout
+2026-05-05 12:08:50,221 INFO    MainThread:112411 [wandb_init.py:init():1056] starting run threads in backend
+2026-05-05 12:08:50,323 INFO    MainThread:112411 [wandb_run.py:_console_start():2554] atexit reg
+2026-05-05 12:08:50,323 INFO    MainThread:112411 [wandb_run.py:_redirect():2403] redirect: wrap_raw
+2026-05-05 12:08:50,323 INFO    MainThread:112411 [wandb_run.py:_redirect():2472] Wrapping output streams.
+2026-05-05 12:08:50,323 INFO    MainThread:112411 [wandb_run.py:_redirect():2495] Redirects installed.
+2026-05-05 12:08:50,326 INFO    MainThread:112411 [wandb_init.py:init():1094] run started, returning control to user process
+2026-05-05 12:08:50,326 INFO    MainThread:112411 [wandb_run.py:_config_callback():1415] config_cb None None {'output_dir': '/home/daffa/Documents/FlowPolicy/FlowPolicy/data/outputs/2026.05.05/12.08.43_train_flowpolicy_franka_kitchen_complete4'}
+2026-05-05 12:15:42,111 ERROR   asyncio_0 :112411 [util.py:get_module():232] [no run ID] Error importing optional module moviepy.video.io.ImageSequenceClip
+Traceback (most recent call last):
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/wandb/util.py", line 198, in import_module_lazy
+    return sys.modules[name]
+KeyError: 'moviepy.video.io.ImageSequenceClip'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/wandb/util.py", line 227, in get_module
+    return import_module_lazy(name)
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/wandb/util.py", line 200, in import_module_lazy
+    spec = importlib.util.find_spec(name)
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/importlib/util.py", line 94, in find_spec
+    parent = __import__(parent_name, fromlist=['__path__'])
+ModuleNotFoundError: No module named 'moviepy'
+2026-05-05 12:15:42,121 INFO    wandb-AsyncioManager-main:112411 [service_client.py:_forward_responses():134] Reached EOF.
+2026-05-05 12:15:42,121 INFO    wandb-AsyncioManager-main:112411 [mailbox.py:close():155] Closing mailbox, abandoning 1 handles.

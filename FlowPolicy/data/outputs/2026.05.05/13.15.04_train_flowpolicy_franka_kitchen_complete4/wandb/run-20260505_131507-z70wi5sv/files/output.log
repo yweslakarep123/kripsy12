@@ -1,0 +1,58 @@
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+[2026-05-05 13:15:11,625][OpenGL.acceleratesupport][INFO] - No OpenGL_accelerate module loaded: No module named 'OpenGL_accelerate'
+AdroitHandRelocateDense-v1, AdroitHandHammerDense-v1, AdroitHandDoorDense-v1 environment's reward functions were updated in v1.2.1 without an environment version update. Therefore, use gymnasium-robotics==1.2.0 for v1 reproducibility or use v2 in gymnasium-robotics>=1.4.3. See https://github.com/Farama-Foundation/Gymnasium-Robotics/pull/220 for more details
+[FrankaKitchenPointCloudEnv] tasks=['microwave', 'kettle', 'slide cabinet', 'light switch'] sequential_order=None num_points=512
+Training epoch 0:   6%|▋         | 2/32 [00:01<00:17,  1.67it/s, loss=0.000158]
+total one step time: 0.708
+ compute loss time: 0.607
+ step optimizer time: 0.064
+ update ema time: 0.007
+ logging time: 0.028
+total one step time: 0.240
+ compute loss time: 0.095
+ step optimizer time: 0.006
+ update ema time: 0.016
+ logging time: 0.124
+total one step time: 0.241
+ compute loss time: 0.094
+ step optimizer time: 0.006
+ update ema time: 0.016
+ logging time: 0.124
+total one step time: 0.244
+ compute loss time: 0.097
+ step optimizer time: 0.008
+ update ema time: 0.014
+ logging time: 0.124
+total one step time: 0.250
+ compute loss time: 0.100
+ step optimizer time: 0.007
+ update ema time: 0.017
+ logging time: 0.126
+total one step time: 0.245
+ compute loss time: 0.098
+ step optimizer time: 0.007
+ update ema time: 0.015
+ logging time: 0.125
+total one step time: 0.245
+ compute loss time: 0.098
+ step optimizer time: 0.006
+ update ema time: 0.016
+ logging time: 0.125
+total one step time: 0.245
+ compute loss time: 0.098
+ step optimizer time: 0.006
+ update ema time: 0.016
+ logging time: 0.125
+total one step time: 0.248
+ compute loss time: 0.099
+ step optimizer time: 0.006
+ update ema time: 0.017
+ logging time: 0.126
+total one step time: 0.246
+ compute loss time: 0.098
+ step optimizer time: 0.006
+ update ema time: 0.016
+ logging time: 0.125

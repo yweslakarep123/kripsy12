@@ -1,0 +1,2 @@
+[2026-05-05 13:13:18,230][flow_policy_3d.model.flow.conditional_unet1d][INFO] - number of parameters: 2.556233e+08
+[2026-05-05 13:13:19,907][OpenGL.acceleratesupport][INFO] - No OpenGL_accelerate module loaded: No module named 'OpenGL_accelerate'

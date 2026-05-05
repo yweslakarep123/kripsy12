@@ -1,0 +1,2 @@
+- task=franka_kitchen_complete4
+- task.dataset.zarr_path=data/kitchen_complete_from_minari.zarr

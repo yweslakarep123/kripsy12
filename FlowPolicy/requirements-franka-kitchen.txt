@@ -1,0 +1,31 @@
+# FlowPolicy + Franka Kitchen (Gymnasium-Robotics). Usage:
+#   conda activate flowpolicy-kitchen
+#   conda install pytorch torchvision pytorch-cuda=12.4 -c pytorch -c nvidia -y
+#   pip install -r requirements-franka-kitchen.txt
+#   pip install -e .
+#
+# PyTorch3D: if pip fails, use conda: conda install pytorch3d -c pytorch3d
+
+gymnasium>=0.29.1
+gym>=0.26,<0.27
+gymnasium-robotics>=1.2.0
+mujoco>=3.0.0
+zarr>=2.14
+numcodecs>=0.12
+numpy>=1.23
+numba>=0.57
+torch>=2.0
+open3d>=0.17
+hydra-core>=1.3
+omegaconf>=2.3
+dill>=0.3
+wandb>=0.15
+tqdm>=4.65
+termcolor>=2.3
+matplotlib>=3.7
+natsort>=8.4
+dm-env>=1.6
+Pillow>=9.0
+einops>=0.7
+minari>=0.4.0
+pytorch3d>=0.7.5

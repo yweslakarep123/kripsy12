@@ -1,0 +1,86 @@
+Error executing job with overrides: ['task=franka_kitchen_complete4', 'task.dataset.zarr_path=FlowPolicy/data/kitchen_complete_from_minari.zarr']
+Traceback (most recent call last):
+  File "/home/daffa/Documents/FlowPolicy/FlowPolicy/train.py", line 513, in <module>
+    main()
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/main.py", line 94, in decorated_main
+    _run_hydra(
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/_internal/utils.py", line 394, in _run_hydra
+    _run_app(
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/_internal/utils.py", line 457, in _run_app
+    run_and_report(
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/_internal/utils.py", line 223, in run_and_report
+    raise ex
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/_internal/utils.py", line 220, in run_and_report
+    return func()
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/_internal/utils.py", line 458, in <lambda>
+    lambda: hydra.run(
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/_internal/hydra.py", line 132, in run
+    _ = ret.return_value
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/core/utils.py", line 260, in return_value
+    raise self._return_value
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/core/utils.py", line 186, in run_job
+    ret.return_value = task_function(task_cfg)
+  File "/home/daffa/Documents/FlowPolicy/FlowPolicy/train.py", line 510, in main
+    workspace.run()
+  File "/home/daffa/Documents/FlowPolicy/FlowPolicy/train.py", line 175, in run
+    self.model.to(device)
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1343, in to
+    return self._apply(convert)
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/torch/nn/modules/module.py", line 903, in _apply
+    module._apply(fn)
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/torch/nn/modules/module.py", line 903, in _apply
+    module._apply(fn)
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/torch/nn/modules/module.py", line 903, in _apply
+    module._apply(fn)
+  [Previous line repeated 1 more time]
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/torch/nn/modules/module.py", line 930, in _apply
+    param_applied = fn(param)
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1329, in convert
+    return t.to(
+RuntimeError: CUDA error: out of memory
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+Traceback (most recent call last):
+  File "/home/daffa/Documents/FlowPolicy/FlowPolicy/train.py", line 513, in <module>
+    main()
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/main.py", line 94, in decorated_main
+    _run_hydra(
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/_internal/utils.py", line 394, in _run_hydra
+    _run_app(
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/_internal/utils.py", line 457, in _run_app
+    run_and_report(
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/_internal/utils.py", line 223, in run_and_report
+    raise ex
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/_internal/utils.py", line 220, in run_and_report
+    return func()
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/_internal/utils.py", line 458, in <lambda>
+    lambda: hydra.run(
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/_internal/hydra.py", line 132, in run
+    _ = ret.return_value
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/core/utils.py", line 260, in return_value
+    raise self._return_value
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/hydra/core/utils.py", line 186, in run_job
+    ret.return_value = task_function(task_cfg)
+  File "/home/daffa/Documents/FlowPolicy/FlowPolicy/train.py", line 510, in main
+    workspace.run()
+  File "/home/daffa/Documents/FlowPolicy/FlowPolicy/train.py", line 175, in run
+    self.model.to(device)
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1343, in to
+    return self._apply(convert)
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/torch/nn/modules/module.py", line 903, in _apply
+    module._apply(fn)
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/torch/nn/modules/module.py", line 903, in _apply
+    module._apply(fn)
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/torch/nn/modules/module.py", line 903, in _apply
+    module._apply(fn)
+  [Previous line repeated 1 more time]
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/torch/nn/modules/module.py", line 930, in _apply
+    param_applied = fn(param)
+  File "/home/daffa/miniforge3/envs/flowpolicy-kitchen/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1329, in convert
+    return t.to(
+RuntimeError: CUDA error: out of memory
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
