@@ -23,7 +23,7 @@ def _save(fig, path_base: Path):
 
 
 def plot_tradeoff_scatter(df_ok: pd.DataFrame, out_dir: Path):
-    """Satu titik per (profile, cfg_idx); error bar = std lintas seed (rata-rata lipatan)."""
+    """Satu titik per (profile, cfg_idx); error bar = std lintas seed."""
     fig, ax = plt.subplots(figsize=(9, 6))
     markers = {"standard": "o", "minimal": "s"}
     profiles = df_ok["profile"].unique()
@@ -101,7 +101,7 @@ def plot_success_bars(summary: pd.DataFrame, results_ok: pd.DataFrame, out_dir: 
 
 
 def plot_cv_box(summary: pd.DataFrame, results_ok: pd.DataFrame, out_dir: Path):
-    """Top-5 cfg_idx: kotak distribusi success_rate_k4 (folds × seeds)."""
+    """Top-5 cfg_idx: kotak distribusi success_rate_k4 (varians antar seed)."""
     fig, ax = plt.subplots(figsize=(10, 5))
     top_cfg = summary.groupby("cfg_idx")["trade_off_mean"].mean().nlargest(5).index.tolist()
     positions = []
@@ -128,7 +128,7 @@ def plot_cv_box(summary: pd.DataFrame, results_ok: pd.DataFrame, out_dir: Path):
             patch.set_facecolor(c)
             patch.set_alpha(0.55)
     ax.set_ylabel("success_rate_k4")
-    ax.set_title("CV + seed variance (top-5 cfg_idx by trade_off)")
+    ax.set_title("Seed variance (top-5 cfg_idx by trade_off)")
     ax.grid(True, axis="y", alpha=0.3)
     _save(fig, out_dir / "cv_fold_variance")
 

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-Orkestrator eksperimen:
-  1) Baseline FlowPolicy (hyperparameter default) × seed × preprocessing × CV — selalu lebih dulu
-  2) Random search configs × seed × preprocessing × CV
+Orkestrator eksperimen (tanpa k-fold):
+
+  1) Baseline — hyperparameter default × 3 seed × 2 preprocessing = 6 run
+  2) Random search — n_configs × 3 seed × 2 preprocessing = 60 run (default n_configs=10)
+
+Total default: 66 run. Satu partisi train/val episode (bukan lipatan CV).
 
 Resume: metrik lengkap (metrics.json atau baris results.csv status=ok) dilewati;
 training terputus dilanjutkan (resume Hydra) jika ada latest.ckpt tanpa training_final.json;
@@ -18,7 +21,6 @@ import os
 import pathlib
 import subprocess
 import sys
-import time
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
@@ -29,7 +31,7 @@ REPO_ROOT = SCRIPT_DIR.parent
 FLOWPOLICY_ROOT = REPO_ROOT / "FlowPolicy"
 
 sys.path.insert(0, str(SCRIPT_DIR))
-from cv_splits import build_cv_splits, save_splits  # noqa: E402
+from cv_splits import build_single_train_val_split, save_splits  # noqa: E402
 from experiment_constants import (  # noqa: E402
     BASELINE_CFG_IDX,
     CSV_HPARAM_KEYS,
@@ -68,27 +70,6 @@ def load_or_create_config_bundle(
         text = configs_path.read_text(encoding="utf-8").strip()
         if not text:
             print("[warn] configs.json kosong; akan dibuat ulang dari baseline + random search.")
-            # #region agent log
-            try:
-                _log = REPO_ROOT / ".cursor" / "debug-9a4d02.log"
-                _log.parent.mkdir(parents=True, exist_ok=True)
-                with open(_log, "a", encoding="utf-8") as _lf:
-                    _lf.write(
-                        json.dumps(
-                            {
-                                "sessionId": "9a4d02",
-                                "hypothesisId": "A",
-                                "location": "run_experiment.py:load_or_create_config_bundle",
-                                "message": "configs.json empty file",
-                                "data": {"configs_path": str(configs_path)},
-                                "timestamp": int(time.time() * 1000),
-                            }
-                        )
-                        + "\n"
-                    )
-            except Exception:
-                pass
-            # #endregion
         else:
             try:
                 raw = json.loads(text)
@@ -96,30 +77,6 @@ def load_or_create_config_bundle(
                 print(
                     f"[warn] configs.json bukan JSON valid ({e}); akan dibuat ulang dari baseline + random search."
                 )
-                # #region agent log
-                try:
-                    _log = REPO_ROOT / ".cursor" / "debug-9a4d02.log"
-                    _log.parent.mkdir(parents=True, exist_ok=True)
-                    with open(_log, "a", encoding="utf-8") as _lf:
-                        _lf.write(
-                            json.dumps(
-                                {
-                                    "sessionId": "9a4d02",
-                                    "hypothesisId": "B",
-                                    "location": "run_experiment.py:load_or_create_config_bundle",
-                                    "message": "configs.json JSONDecodeError",
-                                    "data": {
-                                        "configs_path": str(configs_path),
-                                        "err": str(e)[:200],
-                                    },
-                                    "timestamp": int(time.time() * 1000),
-                                }
-                            )
-                            + "\n"
-                        )
-                except Exception:
-                    pass
-                # #endregion
 
     if raw is not None:
         if isinstance(raw, list):
@@ -643,10 +600,19 @@ def main():
     ap.add_argument(
         "--profiles", type=str, nargs="+", default=["standard", "minimal"]
     )
-    ap.add_argument("--n-configs", type=int, default=10)
-    ap.add_argument("--n-folds", type=int, default=5)
+    ap.add_argument(
+        "--n-configs",
+        type=int,
+        default=10,
+        help="Jumlah sample random search; total run RS = n-configs × jumlah seed × jumlah profil (default 10×3×2=60).",
+    )
     ap.add_argument("--sampling-seed", type=int, default=99)
-    ap.add_argument("--cv-seed", type=int, default=12345)
+    ap.add_argument(
+        "--cv-seed",
+        type=int,
+        default=12345,
+        help="Seed pembagian episode train/val (satu partisi, tanpa k-fold).",
+    )
     ap.add_argument("--n-infer-episodes", type=int, default=50)
     ap.add_argument("--output-dir", type=str, default="outputs/experiment")
     ap.add_argument(
@@ -693,18 +659,21 @@ def main():
         args.max_batch_size,
     )
 
-    folds = build_cv_splits(
+    fold_entry = build_single_train_val_split(
         n_episodes=args.n_episodes,
-        n_folds=args.n_folds,
         held_out_test=1,
+        n_grid_partitions=5,
+        partition_index=0,
         seed=args.cv_seed,
     )
     save_splits(
         str(cv_path),
-        folds,
+        [fold_entry],
         meta={
             "n_episodes": args.n_episodes,
-            "n_folds": args.n_folds,
+            "split_mode": "single_train_val",
+            "n_grid_partitions": 5,
+            "partition_index": 0,
             "cv_seed": args.cv_seed,
             "sampling_seed": args.sampling_seed,
             "max_batch_size": args.max_batch_size,
@@ -716,33 +685,31 @@ def main():
     infer_py = FLOWPOLICY_ROOT / "infer_kitchen.py"
     cwd_train = str(FLOWPOLICY_ROOT.resolve())
     hp_cols = list(SEARCH_SPACE.keys())
-
-    all_cfgs = [baseline_cfg] + sampled_cfgs
+    split_fold_idx = int(fold_entry["fold"])
 
     print(
-        "\n>>> Urutan eksperimen: (1) BASELINE default Hyperparameter → "
-        "(2) random search\n"
-        f"    VRAM safety: max_batch_size={args.max_batch_size}, "
+        "\n>>> Urutan: (1) Baseline (6 run) → (2) Random search ("
+        f"{len(args.seeds) * len(args.profiles) * len(sampled_cfgs)} run). "
+        "Satu partisi train/val, tanpa k-fold.\n"
+        f"    VRAM: max_batch_size={args.max_batch_size}, "
         f"num_workers={args.dataloader_num_workers}\n"
     )
 
-    for cfg in all_cfgs:
-        cfg_idx = int(cfg["cfg_idx"])
-        for seed in args.seeds:
-            for profile in args.profiles:
-                for fold_entry in folds:
-                    fold_i = int(fold_entry["fold"])
+    def run_grid_for_configs(cfgs: List[Dict[str, Any]]) -> None:
+        for cfg in cfgs:
+            cfg_idx = int(cfg["cfg_idx"])
+            for seed in args.seeds:
+                for profile in args.profiles:
                     if cfg_idx == BASELINE_CFG_IDX:
-                        run_name = f"baseline_seed{seed}_{profile}_fold{fold_i}"
+                        run_name = f"baseline_seed{seed}_{profile}"
                     else:
-                        run_name = f"cfg{cfg_idx}_seed{seed}_{profile}_fold{fold_i}"
-
+                        run_name = f"cfg{cfg_idx}_seed{seed}_{profile}"
                     execute_one_job(
                         cfg=cfg,
                         cfg_idx=cfg_idx,
                         seed=seed,
                         profile=profile,
-                        fold_i=fold_i,
+                        fold_i=split_fold_idx,
                         fold_entry=fold_entry,
                         run_name=run_name,
                         runs_root=runs_root,
@@ -757,6 +724,9 @@ def main():
                         checkpoint_every=args.checkpoint_every,
                         dataloader_num_workers=args.dataloader_num_workers,
                     )
+
+    run_grid_for_configs([baseline_cfg])
+    run_grid_for_configs(sampled_cfgs)
 
     summarize_script = SCRIPT_DIR / "summarize.py"
     plot_script = SCRIPT_DIR / "plot_results.py"

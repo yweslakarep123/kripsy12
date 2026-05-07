@@ -5,14 +5,15 @@ Implementasi **Flow Policy** untuk kontrol robotik dengan observasi **point clou
 Struktur repositori:
 
 ```text
-FlowPolicy/                 # root Git (repo ini)
-├── scripts/                # orkestrator eksperimen (baseline + random search + CV)
+<akar-repo>/                # root Git (folder berisi scripts + FlowPolicy)
+├── scripts/                # orkestrator eksperimen (baseline + random search)
 │   ├── run_experiment.py
+│   ├── run_experiment.sh   # pintasan CLI dengan default 66 run
 │   ├── cv_splits.py
 │   ├── summarize.py
 │   ├── plot_results.py
 │   └── experiment_constants.py
-└── FlowPolicy/             # kode Python, train.py, paket flow_policy_3d
+└── FlowPolicy/             # train.py, infer_kitchen.py, paket flow_policy_3d
     ├── train.py
     ├── infer_kitchen.py
     ├── setup.py
@@ -20,8 +21,8 @@ FlowPolicy/                 # root Git (repo ini)
     └── flow_policy_3d/
 ```
 
-- Perintah **training tunggal** (`train.py`): dari **`FlowPolicy/FlowPolicy`**.
-- **Pipeline eksperimen** (`scripts/run_experiment.py`): dari **akar repo** (`FlowPolicy/`, induk dari folder `FlowPolicy/` yang berisi `train.py`).
+- Perintah **training tunggal** (`train.py`): dari **`FlowPolicy/`** (folder yang berisi `train.py`).
+- **Pipeline eksperimen** (`scripts/run_experiment.py`): dijalankan dari **akar repositori** (folder induk `scripts/` dan `FlowPolicy/`).
 
 ## Prasyarat
 
@@ -52,7 +53,7 @@ conda install pytorch torchvision pytorch-cuda=12.4 -c pytorch -c nvidia -y
 ### 3. Dependensi proyek + editable install
 
 ```bash
-cd FlowPolicy/FlowPolicy
+cd FlowPolicy
 pip install -U pip
 pip install -r requirements-franka-kitchen.txt
 pip install -e .
@@ -68,22 +69,22 @@ conda install pytorch3d -c pytorch3d
 
 Task Franka Kitchen membutuhkan dataset **zarr** (lihat `flow_policy_3d/config/task/franka_kitchen_complete4.yaml`, field `task.dataset.zarr_path`).
 
-- Default config mengarah ke `data/franka_kitchen_complete4_expert.zarr` (relatif dari `FlowPolicy/FlowPolicy`).
+- Default config mengarah ke `data/franka_kitchen_complete4_expert.zarr` (relatif dari `FlowPolicy/`).
 - Anda bisa mengganti path lewat override Hydra, misalnya data hasil konversi Minari:
 
 ```bash
-task.dataset.zarr_path=FlowPolicy/data/kitchen_complete_from_minari.zarr
+task.dataset.zarr_path=data/kitchen_complete_from_minari.zarr
 ```
 
 Pastikan file zarr ada di path tersebut (atau gunakan path absolut di instance Vast.ai).
 
 ## Menjalankan training
 
-Dari **`FlowPolicy/FlowPolicy`**:
+Dari **`FlowPolicy/`**:
 
 ```bash
 python train.py task=franka_kitchen_complete4 \
-  task.dataset.zarr_path=FlowPolicy/data/kitchen_complete_from_minari.zarr
+  task.dataset.zarr_path=data/kitchen_complete_from_minari.zarr
 ```
 
 Override umum lain:
@@ -94,45 +95,66 @@ Override umum lain:
 | `training.debug=true` | Mode debug Hydra (epoch/step dibatasi di kode). |
 | `logging.mode=offline` | W&B tanpa upload (berguna di mesin tanpa kredensial). |
 
-Checkpoint dan log Hydra biasanya di bawah `FlowPolicy/FlowPolicy/data/outputs/`.
+Checkpoint dan log Hydra biasanya di bawah `FlowPolicy/data/outputs/` (atau sesuai `hydra.run.dir`).
 
-## Pipeline eksperimen (baseline + random search + CV)
+## Pipeline eksperimen (baseline + random search, tanpa k-fold)
 
-Skrip **`scripts/run_experiment.py`** mengorkestrasi:
+Pelatihan **tidak** memakai validasi silang berlipat (k-fold). Episode dibagi **sekali** menjadi train / validation / test (`scripts/cv_splits.py`): satu partisi tetap, dapat direproduksi dengan `--cv-seed`.
 
-1. **Baseline** — hyperparameter default FlowPolicy (`experiment_constants.DEFAULT_BASELINE_HPARAMS`) untuk tiap kombinasi **seed × preprocessing × lipatan CV**.
-2. **Random search** — konfigurasi yang disampling sekali (disimpan di `configs.json`), dipakai bersama untuk semua seed dan profil preprocessing.
+Skrip **`scripts/run_experiment.py`** menjalankan dua fase **berurutan**:
 
-Preprocessing: **`standard`** (noise observasi) dan **`minimal`** (tanpa augmentasi). Tiap run punya folder sendiri di bawah `runs/`.
+| Fase | Isi | Jumlah run (default) |
+|------|-----|------------------------|
+| **1. Baseline** | Hyperparameter default FlowPolicy (`experiment_constants.DEFAULT_BASELINE_HPARAMS`) × **3 seed** × **2 profil preprocessing** | **6** |
+| **2. Random search** | Konfigurasi yang disampling sekali (`configs.json`, kolom `sampled`) × **3 seed** × **2 profil** | **60** (`--n-configs 10` → 10 × 3 × 2) |
+
+**Total default: 66 run** (6 baseline + 60 random search).
+
+Profil preprocessing (proxy “dengan / tanpa” augmentasi observasi): **`standard`** (noise observasi) dan **`minimal`** (tanpa noise tersebut). Tiap run punya folder sendiri di `runs/`.
 
 ### Menjalankan dari akar repositori
 
+Folder akar adalah yang berisi **`scripts/`** dan **`FlowPolicy/`** (kode training ada di `FlowPolicy/train.py`).
+
+**Opsi A — skrip pintasan (disarankan):**
+
 ```bash
-cd FlowPolicy    # folder yang berisi scripts/ dan subfolder FlowPolicy/
+./scripts/run_experiment.sh \
+  --output-dir outputs/experiment \
+  --zarr-path data/kitchen_complete_from_minari.zarr
+```
+
+**Opsi B — memanggil Python langsung:**
+
+```bash
 python scripts/run_experiment.py \
   --output-dir outputs/experiment \
   --zarr-path data/kitchen_complete_from_minari.zarr
 ```
 
-Argumen `--zarr-path` bersifat **relatif terhadap `FlowPolicy/FlowPolicy`** (tempat `train.py`). Sesuaikan jika dataset Anda di lokasi lain (mis. path absolut).
+Argumen `--zarr-path` **relatif terhadap `FlowPolicy/`** (direktori tempat `train.py`). Sesuaikan jika dataset Anda di lokasi lain (mis. path absolut).
 
-### Opsi CLI yang sering dipakai
+### Opsi untuk GPU 16 GB
 
-| Argumen | Default | Keterangan |
-|---------|---------|------------|
-| `--seeds` | `0 42 101` | Tiga seed untuk inisialisasi / shuffle / inferensi |
-| `--profiles` | `standard minimal` | Profil dataset (dengan / tanpa noise observasi) |
-| `--n-configs` | `10` | Jumlah kombinasi hyperparameter random search |
-| `--n-folds` | `5` | Lipatan CV pada level episode |
-| `--sampling-seed` | `99` | Seed untuk sampling random search (reproducible `configs.json`) |
-| `--cv-seed` | `12345` | Seed pembagian episode train/val/test |
-| `--n-infer-episodes` | `50` | Episode evaluasi setelah training |
-| `--output-dir` | `outputs/experiment` | Relatif terhadap akar repo |
-| `--max-batch-size` | `128` | **Plafon** batch train/val (turunkan jika VRAM ~16 GB kewalahan, mis. `96` atau `64`) |
-| `--dataloader-num-workers` | `4` | Workers DataLoader (turunkan jika RAM host penuh) |
-| `--checkpoint-every` | `200` | Simpan checkpoint berkala agar bisa dilanjut setelah mesin mati |
+Model ini berat; pada GPU **16 GB** kurangi beban memori bertahap jika muncul OOM:
 
-Contoh untuk GPU **VRAM ~16 GB**:
+| Knob | Saran untuk 16 GB | Catatan |
+|------|-------------------|---------|
+| `--max-batch-size` | **`64`** (paling aman), lalu coba **`96`** | Membatasi batch train dan validation secara bersamaan |
+| `--dataloader-num-workers` | **`2`** atau **`0`** | Mengurangi salinan batch di RAM CPU |
+| `--checkpoint-every` | tetap default atau lebih besar | Tidak mengurangi VRAM; hanya frekuensi simpan ckpt |
+
+Contoh **konservatif (VRAM 16 GB)**:
+
+```bash
+./scripts/run_experiment.sh \
+  --output-dir outputs/experiment \
+  --zarr-path data/kitchen_complete_from_minari.zarr \
+  --max-batch-size 64 \
+  --dataloader-num-workers 2
+```
+
+Contoh **sedikit lebih agresif** (setelah 64 berjalan stabil):
 
 ```bash
 python scripts/run_experiment.py \
@@ -142,17 +164,37 @@ python scripts/run_experiment.py \
   --dataloader-num-workers 4
 ```
 
+Default orchestrator memakai **`--max-batch-size 128`**; itu cocok untuk VRAM **≥ ~24 GB**. Untuk **16 GB**, mulai dari **`64`** atau **`96`**.
+
+### Opsi CLI yang sering dipakai
+
+| Argumen | Default | Keterangan |
+|---------|---------|------------|
+| `--seeds` | `0 42 101` | Tiga seed untuk training / dataset / inferensi |
+| `--profiles` | `standard minimal` | Profil preprocessing dataset |
+| `--n-configs` | `10` | Jumlah sampel random search; total run RS = **n × jumlah seed × jumlah profil** (= 60 dengan default) |
+| `--sampling-seed` | `99` | Seed sampling random search (agar `configs.json` reproducible) |
+| `--cv-seed` | `12345` | Seed **satu** pembagian episode train/val/test (bukan k-fold) |
+| `--n-infer-episodes` | `50` | Episode evaluasi setelah training |
+| `--output-dir` | `outputs/experiment` | Relatif terhadap akar repo |
+| `--max-batch-size` | `128` | Plafon batch train/val; **turunkan untuk GPU 16 GB** (lihat tabel di atas) |
+| `--dataloader-num-workers` | `4` | Workers DataLoader |
+| `--checkpoint-every` | `200` | Simpan checkpoint berkala (resume jika mesin mati) |
+
 ### Keluaran
 
 Di `--output-dir` (mis. `outputs/experiment/`):
 
 - `configs.json` — baseline + daftar konfigurasi random search (`version: 2`).
-- `cv_splits.json` — definisi lipatan episode.
+- `cv_splits.json` — **satu** partisi train/val (+ meta `split_mode`, bukan daftar lipatan k-fold penuh).
 - `results.csv` — satu baris per run (hyperparameter + metrik + `status`).
-- `runs/<nama_run>/` — Hydra output, `checkpoints/`, `metrics.json`, `training_final.json`.
+- `runs/<nama_run>/` — output Hydra, `checkpoints/`, `metrics.json`, `training_final.json`.
 - `summary.csv`, `plots/*.png` dan `*.pdf` — dibuat otomatis di akhir (`summarize.py`, `plot_results.py`).
 
-Nama folder baseline: `baseline_seed<seed>_<profile>_fold<f>`; random search: `cfg<idx>_seed<seed>_<profile>_fold<f>`.
+Nama folder run:
+
+- Baseline: `baseline_seed<seed>_<profile>`
+- Random search: `cfg<idx>_seed<seed>_<profile>`
 
 ### Resume setelah mesin mati
 
@@ -165,7 +207,7 @@ Konfigurasi tiap job dicetak ke **terminal** sebelum `train` / `infer`.
 
 ### Inferensi manual (checkpoint tunggal)
 
-Dari **`FlowPolicy/FlowPolicy`**:
+Dari **`FlowPolicy/`**:
 
 ```bash
 python infer_kitchen.py \
@@ -191,8 +233,8 @@ python scripts/plot_results.py --output-dir outputs/experiment
 2. **Clone repo** ke disk instance (mis. `/workspace`):
 
    ```bash
-   git clone https://github.com/<user>/FlowPolicy.git
-   cd FlowPolicy/FlowPolicy
+   git clone https://github.com/<user>/<repo>.git
+   cd <repo>
    ```
 
 3. **Variabel lingkungan** (di UI Vast atau di shell):
@@ -202,7 +244,7 @@ python scripts/plot_results.py --output-dir outputs/experiment
 
 4. **Data zarr:** unggah ke volume instance atau unduh dari penyimpanan Anda; gunakan path absolut di override `task.dataset.zarr_path` agar tidak membingungkan working directory Hydra.
 
-5. **VRAM:** model ini besar (~255M parameter). Jika masih OOM, kurangi `dataloader.batch_size` / `val_dataloader.batch_size` di override Hydra atau gunakan GPU dengan memori lebih besar. Urutan inisialisasi di `train.py` sudah mengutamakan memuat bobot ke GPU sebelum membuat environment simulasi Kitchen (mengurangi bentrok VRAM dengan MuJoCo/rendering).
+5. **VRAM (16 GB):** lihat [Opsi untuk GPU 16 GB](#opsi-untuk-gpu-16-gb) — utamakan menurunkan **`--max-batch-size`** pada `run_experiment.py`. Jika masih OOM, persempit batch di override Hydra atau gunakan GPU dengan memori lebih besar. Urutan inisialisasi di `train.py` sudah mengutamakan memuat bobot ke GPU sebelum membuat environment simulasi Kitchen (mengurangi bentrok VRAM dengan MuJoCo/rendering).
 
 6. **Headless:** pastikan tidak ada ketergantungan pada display; rendering `rgb_array` via MuJoCo biasanya berjalan di server GPU.
 
@@ -211,7 +253,7 @@ Contoh **On-start script** ringkas:
 ```bash
 #!/bin/bash
 set -euo pipefail
-cd /workspace/FlowPolicy/FlowPolicy   # sesuaikan path clone Anda
+cd /workspace/<repo>/FlowPolicy   # folder yang berisi train.py
 pip install -r requirements-franka-kitchen.txt
 pip install -e .
 python train.py task=franka_kitchen_complete4 task.dataset.zarr_path=/data/kitchen.zarr
@@ -220,12 +262,12 @@ python train.py task=franka_kitchen_complete4 task.dataset.zarr_path=/data/kitch
 ## Push ke GitHub
 
 1. Buat repositori kosong di GitHub.
-2. Di mesin lokal (dari root repo `FlowPolicy/`):
+2. Di mesin lokal (dari **akar repositori**):
 
    ```bash
    git init   # jika belum
    git remote add origin https://github.com/<user>/<repo>.git
-   git add README.md FlowPolicy
+   git add README.md scripts FlowPolicy
    git commit -m "Add README and FlowPolicy training code"
    git branch -M main
    git push -u origin main

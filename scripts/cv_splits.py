@@ -1,8 +1,9 @@
 """
-Pembentukan lipatan validasi silang pada level episode.
+Partisi train/val/test pada level episode.
 
-Contoh: 19 episode, 1 test terholdout, 5 fold pada 18 episode sisa
-→ setiap fold ~15 train, ~3–4 val (bergantung pemisahan).
+Untuk eksperimen utama dipakai **satu** partisi train/val (tanpa melatih semua
+lipatan k-fold). Fungsi `build_cv_splits` tetap ada untuk mereproduksi geometri
+lipatan; `build_single_train_val_split` hanya mengambil satu lipatan tersebut.
 """
 
 from __future__ import annotations
@@ -11,6 +12,34 @@ import json
 from typing import Any, Dict, List
 
 import numpy as np
+
+
+def build_single_train_val_split(
+    n_episodes: int = 19,
+    held_out_test: int = 1,
+    *,
+    n_grid_partitions: int = 5,
+    partition_index: int = 0,
+    seed: int = 12345,
+) -> Dict[str, Any]:
+    """
+    Satu partisi train/val/test — sama dengan satu elemen dari `build_cv_splits`
+    dengan `n_folds=n_grid_partitions`, dipilih `partition_index`.
+
+    Ini **bukan** pelatihan k-fold: hanya satu pemisahan episode yang dipakai.
+    """
+    folds = build_cv_splits(
+        n_episodes=n_episodes,
+        n_folds=n_grid_partitions,
+        held_out_test=held_out_test,
+        seed=seed,
+    )
+    if partition_index < 0 or partition_index >= len(folds):
+        raise ValueError(
+            f"partition_index {partition_index} tidak valid "
+            f"(ada {len(folds)} partisi)."
+        )
+    return folds[partition_index]
 
 
 def build_cv_splits(
