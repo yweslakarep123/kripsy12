@@ -9,6 +9,7 @@ Struktur repositori:
 ├── scripts/                # orkestrator eksperimen (baseline + random search)
 │   ├── run_experiment.py
 │   ├── run_experiment.sh   # pintasan CLI dengan default 66 run
+│   ├── run_experiment_random_search.sh   # hanya random search (tanpa baseline)
 │   ├── cv_splits.py
 │   ├── summarize.py
 │   ├── plot_results.py
@@ -134,6 +135,47 @@ python scripts/run_experiment.py \
 
 Argumen `--zarr-path` **relatif terhadap `FlowPolicy/`** (direktori tempat `train.py`). Sesuaikan jika dataset Anda di lokasi lain (mis. path absolut).
 
+### Hanya random search (tanpa baseline)
+
+Untuk **melewati baseline** dan hanya menjalankan fase random search, gunakan flag **`--random-search-only`** di `run_experiment.py`, atau skrip pintasan **`scripts/run_experiment_random_search.sh`**.
+
+Skrip shell tersebut memakai urutan seed **`0` → `42` → `1010` → `0`** (empat posisi per siklus, lalu berulang untuk kombinasi berikutnya dalam grid), dua profil **`standard`** dan **`minimal`**, serta **`--n-configs 10`** seperti default pipeline penuh. Total run random search dengan default skrip: **10 × 4 × 2 = 80** (bukan 60).
+
+**Sampling grid hiperparameter:** jika variabel lingkungan **`SAMPLING_SEED`** belum diset, skrip mengisi seed sampling **secara acak** tiap kali dijalankan (berguna untuk grid RS baru). Untuk mengulang grid yang sama, set eksplisit, misalnya `SAMPLING_SEED=99`, atau biarkan **`configs.json`** yang sudah ada di `--output-dir` (file itu dipakai ulang; tidak di-resample).
+
+**Opsi A — skrip pintasan:**
+
+```bash
+./scripts/run_experiment_random_search.sh \
+  --output-dir outputs/experiment_rs \
+  --zarr-path data/kitchen_complete_from_minari.zarr
+```
+
+Argumen tambahan diteruskan ke `run_experiment.py` (misalnya `--max-batch-size 64 --dataloader-num-workers 2`).
+
+Reproduksi grid sampling (seed sampling tetap):
+
+```bash
+SAMPLING_SEED=99 ./scripts/run_experiment_random_search.sh \
+  --output-dir outputs/experiment_rs \
+  --zarr-path data/kitchen_complete_from_minari.zarr
+```
+
+**Opsi B — Python langsung** (parameter seed / sampling bisa Anda ubah):
+
+```bash
+python scripts/run_experiment.py \
+  --random-search-only \
+  --seeds 0 42 1010 0 \
+  --profiles standard minimal \
+  --n-configs 10 \
+  --sampling-seed 99 \
+  --output-dir outputs/experiment_rs \
+  --zarr-path data/kitchen_complete_from_minari.zarr
+```
+
+Flag **`--baseline-only`** dan **`--random-search-only`** saling meniadakan; jangan dipakai bersamaan.
+
 ### Opsi untuk GPU 16 GB
 
 Model ini berat; pada GPU **16 GB** kurangi beban memori bertahap jika muncul OOM:
@@ -204,6 +246,8 @@ Jika masih OOM setelah **`16`**, tidak ada pengaturan aman lain di orchestrator 
 | `--max-batch-size` | `128` | Plafon batch train/val; turunkan untuk **GPU 16 GB** atau **laptop 8 GB** (lihat bagian di atas) |
 | `--dataloader-num-workers` | `4` | Workers DataLoader |
 | `--checkpoint-every` | `200` | Simpan checkpoint berkala (resume jika mesin mati) |
+| `--baseline-only` | (off) | Hanya baseline; random search tidak dijalankan |
+| `--random-search-only` | (off) | Hanya random search; baseline tidak dijalankan |
 
 ### Keluaran
 
