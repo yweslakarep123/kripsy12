@@ -1,0 +1,3 @@
+{"sessionId": "223216", "hypothesisId": "A", "location": "run_experiment.py:main:after_parse_args", "message": "parse_args ok", "data": {"output_dir": "outputs/experiment", "baseline_only": true, "checkpoint_every": 200}, "timestamp": 1778151641282}
+{"sessionId": "223216", "hypothesisId": "A", "location": "run_experiment.py:main:after_parse_args", "message": "parse_args ok", "data": {"output_dir": "outputs/experiment", "baseline_only": true, "checkpoint_every": 200}, "timestamp": 1778151671929}
+{"sessionId": "223216", "hypothesisId": "A", "location": "run_experiment.py:main:after_parse_args", "message": "parse_args ok", "data": {"output_dir": "outputs/experiment", "baseline_only": true, "checkpoint_every": 200}, "timestamp": 1778151707173}

@@ -166,6 +166,30 @@ python scripts/run_experiment.py \
 
 Default orchestrator memakai **`--max-batch-size 128`**; itu cocok untuk VRAM **≥ ~24 GB**. Untuk **16 GB**, mulai dari **`64`** atau **`96`**.
 
+### Opsi untuk GPU 8 GB (laptop)
+
+Pada **VRAM 8 GB** (umum di laptop gaming ringan / mobile GPU), ruang sangat sempit untuk model besar + simulasi Kitchen. Perkirakan **OOM** lebih sering; selalu mulai dari batch **kecil** dan worker **minimal**:
+
+| Knob | Saran untuk 8 GB | Catatan |
+|------|------------------|---------|
+| `--max-batch-size` | **`16`** (paling aman), lalu coba **`32`** jika stabil | Lebih kecil dari 16 GB; hindari `64` kecuali Anda sudah verifikasi tidak OOM |
+| `--dataloader-num-workers` | **`0`** (disarankan) atau **`1`** | Worker lebih banyak menambah salinan batch di **RAM sistem** laptop |
+| `--checkpoint-every` | bisa dinaikkan (mis. `400`) | Mengurangi frekuensi I/O disk, tidak menolong VRAM banyak |
+
+Contoh **konservatif (VRAM 8 GB / laptop)**:
+
+```bash
+./scripts/run_experiment.sh \
+  --output-dir outputs/experiment \
+  --zarr-path data/kitchen_complete_from_minari.zarr \
+  --max-batch-size 16 \
+  --dataloader-num-workers 0
+```
+
+Jika masih OOM setelah **`16`**, tidak ada pengaturan aman lain di orchestrator selain **menurunkan hiperparameter batch di config** (mis. sampel random search yang memakai `batch_size` besar di `configs.json`) atau **menjalankan training tunggal** dengan override Hydra lebih agresif — pertimbangkan juga **instans GPU cloud** (lihat [Vast.ai](#menjalankan-di-vastai)) untuk pipeline **66 run** penuh agar waktu dan stabilitas lebih masuk akal.
+
+**Tips laptop:** tutup aplikasi berat (browser dengan banyak tab, IDE lain), hindari sleep/hibernasi saat training panjang, dan pastikan daya AC terhubung (thermal GPU turun bisa memicu error atau throttling).
+
 ### Opsi CLI yang sering dipakai
 
 | Argumen | Default | Keterangan |
@@ -177,7 +201,7 @@ Default orchestrator memakai **`--max-batch-size 128`**; itu cocok untuk VRAM **
 | `--cv-seed` | `12345` | Seed **satu** pembagian episode train/val/test (bukan k-fold) |
 | `--n-infer-episodes` | `50` | Episode evaluasi setelah training |
 | `--output-dir` | `outputs/experiment` | Relatif terhadap akar repo |
-| `--max-batch-size` | `128` | Plafon batch train/val; **turunkan untuk GPU 16 GB** (lihat tabel di atas) |
+| `--max-batch-size` | `128` | Plafon batch train/val; turunkan untuk **GPU 16 GB** atau **laptop 8 GB** (lihat bagian di atas) |
 | `--dataloader-num-workers` | `4` | Workers DataLoader |
 | `--checkpoint-every` | `200` | Simpan checkpoint berkala (resume jika mesin mati) |
 
@@ -244,7 +268,7 @@ python scripts/plot_results.py --output-dir outputs/experiment
 
 4. **Data zarr:** unggah ke volume instance atau unduh dari penyimpanan Anda; gunakan path absolut di override `task.dataset.zarr_path` agar tidak membingungkan working directory Hydra.
 
-5. **VRAM (16 GB):** lihat [Opsi untuk GPU 16 GB](#opsi-untuk-gpu-16-gb) — utamakan menurunkan **`--max-batch-size`** pada `run_experiment.py`. Jika masih OOM, persempit batch di override Hydra atau gunakan GPU dengan memori lebih besar. Urutan inisialisasi di `train.py` sudah mengutamakan memuat bobot ke GPU sebelum membuat environment simulasi Kitchen (mengurangi bentrok VRAM dengan MuJoCo/rendering).
+5. **VRAM:** untuk penyetelan **16 GB** lihat [Opsi untuk GPU 16 GB](#opsi-untuk-gpu-16-gb); untuk **laptop 8 GB** lihat [Opsi untuk GPU 8 GB (laptop)](#opsi-untuk-gpu-8-gb-laptop). Utamakan menurunkan **`--max-batch-size`** pada `run_experiment.py`. Jika masih OOM, persempit batch di override Hydra atau gunakan GPU dengan memori lebih besar. Urutan inisialisasi di `train.py` sudah mengutamakan memuat bobot ke GPU sebelum membuat environment simulasi Kitchen (mengurangi bentrok VRAM dengan MuJoCo/rendering).
 
 6. **Headless:** pastikan tidak ada ketergantungan pada display; rendering `rgb_array` via MuJoCo biasanya berjalan di server GPU.
 

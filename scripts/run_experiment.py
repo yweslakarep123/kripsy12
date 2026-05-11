@@ -5,7 +5,7 @@ Orkestrator eksperimen (tanpa k-fold):
   1) Baseline — hyperparameter default × 3 seed × 2 preprocessing = 6 run
   2) Random search — n_configs × 3 seed × 2 preprocessing = 60 run (default n_configs=10)
 
-Total default: 66 run. Satu partisi train/val episode (bukan lipatan CV).
+Flag **`--baseline-only`** hanya menjalankan baseline (6 run default); random search dilewati.
 
 Resume: metrik lengkap (metrics.json atau baris results.csv status=ok) dilewati;
 training terputus dilanjutkan (resume Hydra) jika ada latest.ckpt tanpa training_final.json;
@@ -21,6 +21,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
@@ -635,12 +636,43 @@ def main():
         help="Kurangi memori CPU/host; turunkan jika RAM habis.",
     )
     ap.add_argument(
+        "--baseline-only",
+        action="store_true",
+        help="Hanya baseline (3 seed × 2 profil = 6 run default); tanpa random search.",
+    )
+    ap.add_argument(
         "--checkpoint-every",
         type=int,
         default=200,
         help="Simpan checkpoint berkala agar training bisa dilanjut setelah mesin mati.",
     )
     args = ap.parse_args()
+    # #region agent log
+    try:
+        _dbg = REPO_ROOT / ".cursor" / "debug-223216.log"
+        _dbg.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(_dbg, "a", encoding="utf-8") as _df:
+            _df.write(
+                json.dumps(
+                    {
+                        "sessionId": "223216",
+                        "hypothesisId": "A",
+                        "location": "run_experiment.py:main:after_parse_args",
+                        "message": "parse_args ok",
+                        "data": {
+                            "output_dir": args.output_dir,
+                            "baseline_only": bool(args.baseline_only),
+                            "checkpoint_every": args.checkpoint_every,
+                        },
+                        "timestamp": int(time.time() * 1000),
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
 
     out_root = (REPO_ROOT / args.output_dir).resolve()
     runs_root = out_root / "runs"
@@ -687,13 +719,24 @@ def main():
     hp_cols = list(SEARCH_SPACE.keys())
     split_fold_idx = int(fold_entry["fold"])
 
-    print(
-        "\n>>> Urutan: (1) Baseline (6 run) → (2) Random search ("
-        f"{len(args.seeds) * len(args.profiles) * len(sampled_cfgs)} run). "
-        "Satu partisi train/val, tanpa k-fold.\n"
-        f"    VRAM: max_batch_size={args.max_batch_size}, "
-        f"num_workers={args.dataloader_num_workers}\n"
-    )
+    n_base = len(args.seeds) * len(args.profiles)
+    if args.baseline_only:
+        print(
+            "\n>>> Mode --baseline-only: hanya baseline "
+            f"({n_base} run). Random search dilewati.\n"
+            "    Satu partisi train/val, tanpa k-fold.\n"
+            f"    VRAM: max_batch_size={args.max_batch_size}, "
+            f"num_workers={args.dataloader_num_workers}\n"
+        )
+    else:
+        print(
+            "\n>>> Urutan: (1) Baseline "
+            f"({n_base} run) → (2) Random search "
+            f"({len(args.seeds) * len(args.profiles) * len(sampled_cfgs)} run). "
+            "Satu partisi train/val, tanpa k-fold.\n"
+            f"    VRAM: max_batch_size={args.max_batch_size}, "
+            f"num_workers={args.dataloader_num_workers}\n"
+        )
 
     def run_grid_for_configs(cfgs: List[Dict[str, Any]]) -> None:
         for cfg in cfgs:
@@ -726,7 +769,8 @@ def main():
                     )
 
     run_grid_for_configs([baseline_cfg])
-    run_grid_for_configs(sampled_cfgs)
+    if not args.baseline_only:
+        run_grid_for_configs(sampled_cfgs)
 
     summarize_script = SCRIPT_DIR / "summarize.py"
     plot_script = SCRIPT_DIR / "plot_results.py"
