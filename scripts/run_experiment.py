@@ -8,8 +8,10 @@ Orkestrator eksperimen (tanpa k-fold):
 Flag **`--baseline-only`** hanya baseline; fase pencarian dilewati.
 **`--random-search-only`** / **`--bayesian-search-only`** hanya fase pencarian (baseline dilewati).
 
-Metrik inferensi: fase train/val (sim, episode lebih sedikit) + fase test (episode utama),
-masing-masing dengan success total, k1–k4, latensi, trade-off; plus kolom legacy tanpa prefix (= test).
+Metrik inferensi: fase train/val (sim) + fase test; metrik simulasi akhir training (``training_sim_*``)
+dari ``training_sim_metrics.json``; success total & k1–k4; latensi global + rata-rata per-episod;
+``trade_off`` dan ``trade_off_episode_latency``. Video: MP4 inferensi per-episod di ``inference_videos/``,
+bukan video rollout training di W&B.
 
 Resume: metrik lengkap (metrics.json atau baris results.csv status=ok) dilewati;
 training terputus dilanjutkan (resume Hydra) jika ada latest.ckpt tanpa training_final.json;
@@ -339,6 +341,7 @@ def run_infer_subprocess(
     *,
     n_train_val_episodes: int,
     train_val_eval_seed_offset: int,
+    skip_inference_videos: bool = False,
 ) -> int:
     cmd = [
         py,
@@ -358,6 +361,11 @@ def run_infer_subprocess(
         "--warmup-steps",
         "20",
     ]
+    if skip_inference_videos:
+        cmd.append("--skip-inference-videos")
+    else:
+        vdir = pathlib.Path(metrics_path).parent / "inference_videos"
+        cmd.extend(["--inference-videos-dir", str(vdir.resolve())])
     return subprocess.run(cmd, cwd=cwd_train, env=env).returncode
 
 
@@ -383,6 +391,7 @@ def execute_one_job(
     dataloader_num_workers: int,
     n_train_val_episodes: int,
     train_val_eval_seed_offset: int,
+    skip_inference_videos: bool = False,
 ) -> None:
     run_dir = runs_root / run_name
     metrics_path = run_dir / "metrics.json"
@@ -432,6 +441,7 @@ def execute_one_job(
             seed,
             n_train_val_episodes=n_train_val_episodes,
             train_val_eval_seed_offset=train_val_eval_seed_offset,
+            skip_inference_videos=skip_inference_videos,
         )
         tr_l, va_l = load_training_final(run_dir)
         if rc != 0 or not metrics_path.is_file():
@@ -573,6 +583,7 @@ def execute_one_job(
         seed,
         n_train_val_episodes=n_train_val_episodes,
         train_val_eval_seed_offset=train_val_eval_seed_offset,
+        skip_inference_videos=skip_inference_videos,
     )
     tr_l, va_l = load_training_final(run_dir)
     if r2 != 0 or not metrics_path.is_file():
@@ -702,6 +713,11 @@ def main():
         type=int,
         default=31,
         help="Offset seed eval train/val vs test (infer_kitchen).",
+    )
+    ap.add_argument(
+        "--skip-inference-videos",
+        action="store_true",
+        help="Jangan simpan MP4 infer_ep_*.mp4 (hemat waktu/ruang).",
     )
     ap.add_argument(
         "--checkpoint-every",
@@ -874,6 +890,7 @@ def main():
                         dataloader_num_workers=args.dataloader_num_workers,
                         n_train_val_episodes=args.n_train_val_episodes,
                         train_val_eval_seed_offset=args.train_val_eval_seed_offset,
+                        skip_inference_videos=args.skip_inference_videos,
                     )
 
     def run_bayesian_trials() -> None:

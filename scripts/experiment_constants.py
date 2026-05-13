@@ -77,6 +77,18 @@ def config_dict_to_vector(cfg: Dict[str, Any]) -> List[Any]:
 
 # Kolom tambahan results.csv (metrik infer dua fase + alias kompatibel).
 RESULTS_CSV_METRIC_COLUMNS = [
+    "training_sim_success_rate_total",
+    "training_sim_success_rate_k1",
+    "training_sim_success_rate_k2",
+    "training_sim_success_rate_k3",
+    "training_sim_success_rate_k4",
+    "training_sim_mean_inference_latency_ms",
+    "training_sim_std_inference_latency_ms",
+    "training_sim_mean_episode_mean_inference_latency_ms",
+    "training_sim_std_episode_mean_inference_latency_ms",
+    "training_sim_trade_off",
+    "training_sim_trade_off_episode_latency",
+    "training_sim_n_infer_episodes",
     "train_val_success_rate_total",
     "train_val_success_rate_k1",
     "train_val_success_rate_k2",
@@ -84,7 +96,10 @@ RESULTS_CSV_METRIC_COLUMNS = [
     "train_val_success_rate_k4",
     "train_val_mean_inference_latency_ms",
     "train_val_std_inference_latency_ms",
+    "train_val_mean_episode_mean_inference_latency_ms",
+    "train_val_std_episode_mean_inference_latency_ms",
     "train_val_trade_off",
+    "train_val_trade_off_episode_latency",
     "train_val_n_infer_episodes",
     "test_success_rate_total",
     "test_success_rate_k1",
@@ -93,7 +108,10 @@ RESULTS_CSV_METRIC_COLUMNS = [
     "test_success_rate_k4",
     "test_mean_inference_latency_ms",
     "test_std_inference_latency_ms",
+    "test_mean_episode_mean_inference_latency_ms",
+    "test_std_episode_mean_inference_latency_ms",
     "test_trade_off",
+    "test_trade_off_episode_latency",
     "test_n_infer_episodes",
     "success_rate_total",
     "success_rate_k1",
@@ -102,7 +120,10 @@ RESULTS_CSV_METRIC_COLUMNS = [
     "success_rate_k4",
     "mean_inference_latency_ms",
     "std_inference_latency_ms",
+    "mean_episode_mean_inference_latency_ms",
+    "std_episode_mean_inference_latency_ms",
     "trade_off",
+    "trade_off_episode_latency",
 ]
 
 
@@ -116,8 +137,52 @@ def metrics_row_from_infer_json(met: Dict[str, Any]) -> Dict[str, Any]:
         return default
 
     has_tv = "train_val_success_rate_k1" in met
+    has_ts = "training_sim_success_rate_k1" in met
 
     row: Dict[str, Any] = {}
+
+    if has_ts:
+        row["training_sim_success_rate_total"] = pick(
+            "training_sim_success_rate_total"
+        )
+        row["training_sim_success_rate_k1"] = pick("training_sim_success_rate_k1")
+        row["training_sim_success_rate_k2"] = pick("training_sim_success_rate_k2")
+        row["training_sim_success_rate_k3"] = pick("training_sim_success_rate_k3")
+        row["training_sim_success_rate_k4"] = pick("training_sim_success_rate_k4")
+        row["training_sim_mean_inference_latency_ms"] = pick(
+            "training_sim_mean_inference_latency_ms"
+        )
+        row["training_sim_std_inference_latency_ms"] = pick(
+            "training_sim_std_inference_latency_ms"
+        )
+        row["training_sim_mean_episode_mean_inference_latency_ms"] = pick(
+            "training_sim_mean_episode_mean_inference_latency_ms"
+        )
+        row["training_sim_std_episode_mean_inference_latency_ms"] = pick(
+            "training_sim_std_episode_mean_inference_latency_ms"
+        )
+        row["training_sim_trade_off"] = pick("training_sim_trade_off")
+        row["training_sim_trade_off_episode_latency"] = pick(
+            "training_sim_trade_off_episode_latency"
+        )
+        row["training_sim_n_infer_episodes"] = pick("training_sim_n_infer_episodes")
+    else:
+        for c in (
+            "training_sim_success_rate_total",
+            "training_sim_success_rate_k1",
+            "training_sim_success_rate_k2",
+            "training_sim_success_rate_k3",
+            "training_sim_success_rate_k4",
+            "training_sim_mean_inference_latency_ms",
+            "training_sim_std_inference_latency_ms",
+            "training_sim_mean_episode_mean_inference_latency_ms",
+            "training_sim_std_episode_mean_inference_latency_ms",
+            "training_sim_trade_off",
+            "training_sim_trade_off_episode_latency",
+            "training_sim_n_infer_episodes",
+        ):
+            row[c] = ""
+
     if has_tv:
         row["train_val_success_rate_total"] = pick("train_val_success_rate_total")
         row["train_val_success_rate_k1"] = pick("train_val_success_rate_k1")
@@ -130,7 +195,16 @@ def metrics_row_from_infer_json(met: Dict[str, Any]) -> Dict[str, Any]:
         row["train_val_std_inference_latency_ms"] = pick(
             "train_val_std_inference_latency_ms"
         )
+        row["train_val_mean_episode_mean_inference_latency_ms"] = pick(
+            "train_val_mean_episode_mean_inference_latency_ms"
+        )
+        row["train_val_std_episode_mean_inference_latency_ms"] = pick(
+            "train_val_std_episode_mean_inference_latency_ms"
+        )
         row["train_val_trade_off"] = pick("train_val_trade_off")
+        row["train_val_trade_off_episode_latency"] = pick(
+            "train_val_trade_off_episode_latency"
+        )
         row["train_val_n_infer_episodes"] = pick("train_val_n_infer_episodes")
     else:
         for c in (
@@ -141,7 +215,10 @@ def metrics_row_from_infer_json(met: Dict[str, Any]) -> Dict[str, Any]:
             "train_val_success_rate_k4",
             "train_val_mean_inference_latency_ms",
             "train_val_std_inference_latency_ms",
+            "train_val_mean_episode_mean_inference_latency_ms",
+            "train_val_std_episode_mean_inference_latency_ms",
             "train_val_trade_off",
+            "train_val_trade_off_episode_latency",
             "train_val_n_infer_episodes",
         ):
             row[c] = ""
@@ -159,7 +236,18 @@ def metrics_row_from_infer_json(met: Dict[str, Any]) -> Dict[str, Any]:
     row["test_std_inference_latency_ms"] = pick(
         "test_std_inference_latency_ms", "std_inference_latency_ms"
     )
+    row["test_mean_episode_mean_inference_latency_ms"] = pick(
+        "test_mean_episode_mean_inference_latency_ms",
+        "mean_episode_mean_inference_latency_ms",
+    )
+    row["test_std_episode_mean_inference_latency_ms"] = pick(
+        "test_std_episode_mean_inference_latency_ms",
+        "std_episode_mean_inference_latency_ms",
+    )
     row["test_trade_off"] = pick("test_trade_off", "trade_off")
+    row["test_trade_off_episode_latency"] = pick(
+        "test_trade_off_episode_latency", "trade_off_episode_latency"
+    )
     row["test_n_infer_episodes"] = pick(
         "test_n_infer_episodes", "n_infer_episodes"
     )
@@ -177,7 +265,18 @@ def metrics_row_from_infer_json(met: Dict[str, Any]) -> Dict[str, Any]:
     row["std_inference_latency_ms"] = pick(
         "std_inference_latency_ms", "test_std_inference_latency_ms"
     )
+    row["mean_episode_mean_inference_latency_ms"] = pick(
+        "mean_episode_mean_inference_latency_ms",
+        "test_mean_episode_mean_inference_latency_ms",
+    )
+    row["std_episode_mean_inference_latency_ms"] = pick(
+        "std_episode_mean_inference_latency_ms",
+        "test_std_episode_mean_inference_latency_ms",
+    )
     row["trade_off"] = pick("trade_off", "test_trade_off")
+    row["trade_off_episode_latency"] = pick(
+        "trade_off_episode_latency", "test_trade_off_episode_latency"
+    )
 
     return row
 

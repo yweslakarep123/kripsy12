@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 import wandb
 import time
 import numpy as np
@@ -136,6 +137,19 @@ class KitchenRunner(BaseRunner):
                 merged.add(str(item))
         return merged
 
+    @staticmethod
+    def _save_rgb_video_mp4(path: pathlib.Path, tc_hwc: np.ndarray, fps: float) -> None:
+        """Simpan tensor (T, C, H, W) uint8 ke MP4."""
+        if tc_hwc.ndim != 4:
+            raise ValueError(f"video shape tidak didukung: {tc_hwc.shape}")
+        thwc = np.transpose(tc_hwc, (0, 2, 3, 1))
+        if thwc.dtype != np.uint8:
+            thwc = np.clip(thwc, 0, 255).astype(np.uint8)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        import imageio.v2 as imageio
+
+        imageio.mimsave(str(path), thwc, fps=float(fps))
+
     def run_eval_metrics(
         self,
         policy: BasePolicy,
@@ -144,6 +158,7 @@ class KitchenRunner(BaseRunner):
         eval_seed: int = 0,
         log_video: bool = False,
         n_episodes: int | None = None,
+        save_inference_videos_dir: str | pathlib.Path | None = None,
     ):
         """
         Evaluasi dengan warmup GPU, latensi per langkah predict_action, dan success k1–k4.
@@ -151,17 +166,21 @@ class KitchenRunner(BaseRunner):
 
         Args:
             n_episodes: Override jumlah episode evaluasi (default: ``self.eval_episodes``).
+            save_inference_videos_dir: Jika diisi, simpan satu MP4 per episod (inferensi).
         """
         device = policy.device
         env = self.env
-        latencies_ms = []
+        latencies_ms: list[float] = []
+        current_ep_lat_ms: list[float] = []
 
         def predict_timed(obs_dict_input):
             with torch.no_grad():
                 t0 = time.perf_counter()
                 action_dict = policy.predict_action(obs_dict_input)
                 t1 = time.perf_counter()
-            latencies_ms.append((t1 - t0) * 1000.0)
+            dt_ms = (t1 - t0) * 1000.0
+            latencies_ms.append(dt_ms)
+            current_ep_lat_ms.append(dt_ms)
             return action_dict
 
         obs = env.reset(seed=eval_seed)
@@ -178,9 +197,16 @@ class KitchenRunner(BaseRunner):
             predict_timed(obs_dict_input)
 
         latencies_ms.clear()
+        current_ep_lat_ms.clear()
 
         ep_success_levels = []
+        per_episode_mean_inference_latency_ms: list[float] = []
         n_eps = int(self.eval_episodes if n_episodes is None else n_episodes)
+        video_root = (
+            pathlib.Path(save_inference_videos_dir).resolve()
+            if save_inference_videos_dir
+            else None
+        )
 
         for episode_idx in tqdm.tqdm(
             range(n_eps),
@@ -188,6 +214,7 @@ class KitchenRunner(BaseRunner):
             leave=False,
             mininterval=self.tqdm_interval_sec,
         ):
+            current_ep_lat_ms.clear()
             obs = env.reset(seed=int(eval_seed + episode_idx))
             policy.reset()
 
@@ -217,9 +244,24 @@ class KitchenRunner(BaseRunner):
             ]
             ep_success_levels.append(levels_met)
 
+            ep_mean = (
+                float(np.mean(current_ep_lat_ms)) if current_ep_lat_ms else 0.0
+            )
+            per_episode_mean_inference_latency_ms.append(ep_mean)
+
+            if video_root is not None:
+                videos = env.env.get_video()
+                if len(videos.shape) == 5:
+                    videos = videos[:, 0]
+                out_mp4 = video_root / f"infer_ep_{episode_idx:03d}.mp4"
+                self._save_rgb_video_mp4(out_mp4, videos, self.fps)
+
         sr = np.asarray(ep_success_levels, dtype=np.float64)
         mean_lat = float(np.mean(latencies_ms)) if latencies_ms else 0.0
         std_lat = float(np.std(latencies_ms)) if latencies_ms else 0.0
+        ep_means_arr = np.asarray(per_episode_mean_inference_latency_ms, dtype=np.float64)
+        mean_episode_mean_lat = float(np.mean(ep_means_arr)) if len(ep_means_arr) else 0.0
+        std_episode_mean_lat = float(np.std(ep_means_arr)) if len(ep_means_arr) else 0.0
         # Sukses penuh Kitchen-Complete (empat sub-tugas terurut) = level k4.
         success_total_pct = float(sr[:, 3].mean() * 100.0)
         out = {
@@ -230,10 +272,18 @@ class KitchenRunner(BaseRunner):
             "success_rate_k4": float(sr[:, 3].mean() * 100.0),
             "mean_inference_latency_ms": mean_lat,
             "std_inference_latency_ms": std_lat,
+            "per_episode_mean_inference_latency_ms": per_episode_mean_inference_latency_ms,
+            "mean_episode_mean_inference_latency_ms": mean_episode_mean_lat,
+            "std_episode_mean_inference_latency_ms": std_episode_mean_lat,
             "n_infer_episodes": int(n_eps),
         }
         out["trade_off"] = (
             float(out["success_rate_k4"] / mean_lat) if mean_lat > 1e-9 else 0.0
+        )
+        out["trade_off_episode_latency"] = (
+            float(out["success_rate_k4"] / mean_episode_mean_lat)
+            if mean_episode_mean_lat > 1e-9
+            else 0.0
         )
 
         if log_video:
@@ -335,14 +385,7 @@ class KitchenRunner(BaseRunner):
         log_data["SR_test_L3"] = self.logger_util_test.average_of_largest_K()
         log_data["SR_test_L5"] = self.logger_util_test10.average_of_largest_K()
 
-        videos = env.env.get_video()
-        if len(videos.shape) == 5:
-            videos = videos[:, 0]
-
-        videos_wandb = wandb.Video(videos, fps=self.fps, format="mp4")
-        log_data["sim_video_eval"] = videos_wandb
-
+        # Video rollout training tidak di-log ke media; gunakan infer_kitchen + MP4 inferensi.
         _ = env.reset()
-        videos = None
 
         return log_data

@@ -26,6 +26,7 @@ import shutil
 import time
 import threading
 import json
+import numbers
 import subprocess
 from hydra.core.hydra_config import HydraConfig
 from flow_policy_3d.policy.flowpolicy import FlowPolicy
@@ -132,6 +133,25 @@ def _agent_debug_cuda_snapshot(location: str, hypothesis_id: str, extra=None):
             f.write(json.dumps(payload) + "\n")
     except Exception:
         pass
+
+
+def _json_safe_for_metrics(obj):
+    """Serialisasi aman ke JSON (numpy, nested dict/list)."""
+    if isinstance(obj, dict):
+        return {str(k): _json_safe_for_metrics(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe_for_metrics(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, (np.floating, np.integer)):
+        return float(obj) if isinstance(obj, np.floating) else int(obj)
+    if isinstance(obj, numbers.Real) and not isinstance(obj, bool):
+        return float(obj)
+    if isinstance(obj, bool):
+        return obj
+    return obj
 
 
 class TrainFlowPolicyWorkspace:
@@ -501,6 +521,43 @@ class TrainFlowPolicyWorkspace:
             self.global_step += 1
             self.epoch += 1
             del step_log
+
+        # Simulasi pasca-training (k1–k4, latensi, trade_off) — disimpan untuk digabung ke metrics.json saat inferensi.
+        training_sim_path = os.path.join(self.output_dir, "training_sim_metrics.json")
+        if env_runner is not None and hasattr(env_runner, "run_eval_metrics"):
+            policy = self.ema_model if cfg.training.use_ema else self.model
+            policy.eval()
+            policy.to(torch.device(cfg.training.device))
+            n_sim_ep = int(getattr(env_runner, "eval_episodes", 20))
+            try:
+                tsim = env_runner.run_eval_metrics(
+                    policy,
+                    warmup_predict_steps=20,
+                    eval_seed=int(cfg.training.seed),
+                    log_video=False,
+                    n_episodes=n_sim_ep,
+                )
+                with open(training_sim_path, "w") as f:
+                    json.dump(_json_safe_for_metrics(tsim), f, indent=2)
+                try:
+                    log_scalars = {}
+                    for k, v in tsim.items():
+                        if k in ("sim_video_eval", "per_episode_mean_inference_latency_ms"):
+                            continue
+                        if isinstance(v, (list, dict)):
+                            continue
+                        try:
+                            log_scalars[f"training_sim_{k}"] = float(v)
+                        except (TypeError, ValueError):
+                            pass
+                    if log_scalars:
+                        wandb_run.log(log_scalars, step=self.global_step)
+                except Exception:
+                    pass
+            except Exception as e:
+                cprint(f"[warn] training_sim_metrics gagal: {e}", "yellow")
+                with open(training_sim_path, "w") as f:
+                    json.dump({"error": str(e)}, f, indent=2)
 
         if env_runner is not None:
             env_runner.close()

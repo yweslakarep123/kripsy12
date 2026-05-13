@@ -1,9 +1,14 @@
 """
-Inferensi Franka Kitchen dengan metrik k1–k4, latensi, dan trade_off (tanpa Hydra CLI).
+Inferensi Franka Kitchen dengan metrik k1–k4, latensi (global + per-episod), trade_off,
+dan penyimpanan MP4 inferensi (bukan video rollout training).
 
 Dua fase evaluasi simulasi (sama-sama forward policy / "inferensi"):
   - train_val: episode lebih sedikit, seed eval terpisah (proxy cek pasca-training).
   - test: episode utama (metrik "testing" / laporan).
+
+Metrik simulasi pasca-training (success k1–k4, latensi) dari akhir training disimpan di
+``training_sim_metrics.json`` oleh ``train.py`` dan digabung ke ``metrics.json`` dengan
+awalan ``training_sim_*``.
 
 Contoh:
   python infer_kitchen.py --checkpoint runs/foo/checkpoints/latest.ckpt \\
@@ -50,8 +55,18 @@ def _legacy_from_test(test: dict) -> dict:
         "success_rate_k4": test.get("success_rate_k4"),
         "mean_inference_latency_ms": test.get("mean_inference_latency_ms"),
         "std_inference_latency_ms": test.get("std_inference_latency_ms"),
+        "mean_episode_mean_inference_latency_ms": test.get(
+            "mean_episode_mean_inference_latency_ms"
+        ),
+        "std_episode_mean_inference_latency_ms": test.get(
+            "std_episode_mean_inference_latency_ms"
+        ),
         "n_infer_episodes": test.get("n_infer_episodes"),
         "trade_off": test.get("trade_off"),
+        "trade_off_episode_latency": test.get("trade_off_episode_latency"),
+        "per_episode_mean_inference_latency_ms": test.get(
+            "per_episode_mean_inference_latency_ms"
+        ),
     }
 
 
@@ -60,6 +75,39 @@ def _merge_phases(train_val: dict, test: dict) -> dict:
     tv = _prefix_metrics("train_val", train_val)
     te = _prefix_metrics("test", test)
     return {**tv, **te, **_legacy_from_test(test)}
+
+
+def _load_training_sim_prefixed(run_dir: pathlib.Path) -> dict:
+    p = run_dir / "training_sim_metrics.json"
+    if not p.is_file():
+        return {}
+    try:
+        with open(p) as f:
+            d = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(d, dict) or d.get("error"):
+        return {}
+    out: dict = {}
+    for k, v in d.items():
+        if k == "sim_video_eval":
+            continue
+        out[f"training_sim_{k}"] = v
+    return out
+
+
+def _write_video_manifest(video_dir: pathlib.Path, n_expected: int) -> None:
+    if not video_dir.is_dir():
+        return
+    mp4s = sorted(video_dir.glob("infer_ep_*.mp4"))
+    manifest = {
+        "kind": "inference_rollout",
+        "n_expected_episodes": int(n_expected),
+        "n_saved": len(mp4s),
+        "files": [x.name for x in mp4s],
+    }
+    with open(video_dir / "manifest.json", "w") as f:
+        json.dump(manifest, f, indent=2)
 
 
 def main():
@@ -101,6 +149,17 @@ def main():
         default=31,
         help="Offset seed eval train/val vs test agar episode tidak identik.",
     )
+    p.add_argument(
+        "--inference-videos-dir",
+        type=str,
+        default=None,
+        help="Folder untuk MP4 per-episod inferensi (default: <run>/inference_videos).",
+    )
+    p.add_argument(
+        "--skip-inference-videos",
+        action="store_true",
+        help="Jangan menulis MP4 inferensi (hanya metrik).",
+    )
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -124,6 +183,15 @@ def main():
         output_dir=out_parent,
         eval_episodes=n_max,
     )
+    path = pathlib.Path(args.metrics_json).resolve()
+    run_dir = path.parent
+    if args.skip_inference_videos:
+        video_dir_arg = None
+    elif args.inference_videos_dir:
+        video_dir_arg = str(pathlib.Path(args.inference_videos_dir).resolve())
+    else:
+        video_dir_arg = str((run_dir / "inference_videos").resolve())
+
     try:
         m_te = runner.run_eval_metrics(
             policy,
@@ -131,6 +199,7 @@ def main():
             eval_seed=int(args.seed),
             log_video=False,
             n_episodes=int(args.n_infer_episodes),
+            save_inference_videos_dir=video_dir_arg,
         )
 
         if int(args.n_train_val_episodes) > 0:
@@ -141,13 +210,24 @@ def main():
                 log_video=False,
                 n_episodes=int(args.n_train_val_episodes),
             )
-            serializable = _merge_phases(m_tv, m_te)
+            serializable = {
+                **_load_training_sim_prefixed(run_dir),
+                **_merge_phases(m_tv, m_te),
+            }
         else:
-            serializable = {**_prefix_metrics("test", m_te), **_legacy_from_test(m_te)}
-        path = pathlib.Path(args.metrics_json).resolve()
+            serializable = {
+                **_load_training_sim_prefixed(run_dir),
+                **_prefix_metrics("test", m_te),
+                **_legacy_from_test(m_te),
+            }
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
             json.dump(serializable, f, indent=2)
+
+        if video_dir_arg:
+            _write_video_manifest(
+                pathlib.Path(video_dir_arg), int(args.n_infer_episodes)
+            )
 
         # #region agent log
         try:
