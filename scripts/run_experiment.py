@@ -645,8 +645,9 @@ def main():
     ap.add_argument(
         "--zarr-path",
         type=str,
-        default="data/kitchen_complete_from_minari.zarr",
-        help="Relatif ke direktori FlowPolicy/FlowPolicy (tempat train.py)",
+        default="FlowPolicy/data/kitchen_complete_from_minari.zarr",
+        help="Relatif ke akar paket (folder berisi train.py dan flow_policy_3d/), "
+        "mis. FlowPolicy/data/... → .../FlowPolicy/FlowPolicy/data/...",
     )
     ap.add_argument("--n-episodes", type=int, default=19)
     ap.add_argument(

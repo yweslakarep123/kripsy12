@@ -34,7 +34,8 @@ env_runner:
 
 dataset:
   _target_: flow_policy_3d.dataset.kitchen_dataset.KitchenDataset
-  zarr_path: data/franka_kitchen_complete4_expert.zarr
+  # Relatif ke folder train.py (lihat KitchenDataset._resolve_zarr_path).
+  zarr_path: FlowPolicy/data/kitchen_complete_from_minari.zarr
   horizon: ${horizon}
   pad_before: ${eval:'${n_obs_steps}-1'}
   pad_after: ${eval:'${n_action_steps}-1'}

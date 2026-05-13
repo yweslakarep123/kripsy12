@@ -70,11 +70,11 @@ conda install pytorch3d -c pytorch3d
 
 Task Franka Kitchen membutuhkan dataset **zarr** (lihat `flow_policy_3d/config/task/franka_kitchen_complete4.yaml`, field `task.dataset.zarr_path`).
 
-- Default config mengarah ke `data/franka_kitchen_complete4_expert.zarr` (relatif dari `FlowPolicy/`).
+- Default config mengarah ke `FlowPolicy/data/kitchen_complete_from_minari.zarr` (relatif dari folder berisi `train.py`; pada layout repo ini setara dengan `FlowPolicy/FlowPolicy/data/kitchen_complete_from_minari.zarr`).
 - Anda bisa mengganti path lewat override Hydra, misalnya data hasil konversi Minari:
 
 ```bash
-task.dataset.zarr_path=data/kitchen_complete_from_minari.zarr
+task.dataset.zarr_path=FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
 Pastikan file zarr ada di path tersebut (atau gunakan path absolut di instance Vast.ai).
@@ -85,7 +85,7 @@ Dari **`FlowPolicy/`**:
 
 ```bash
 python train.py task=franka_kitchen_complete4 \
-  task.dataset.zarr_path=data/kitchen_complete_from_minari.zarr
+  task.dataset.zarr_path=FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
 Override umum lain:
@@ -122,7 +122,7 @@ Folder akar adalah yang berisi **`scripts/`** dan **`FlowPolicy/`** (kode traini
 ```bash
 ./scripts/run_experiment.sh \
   --output-dir outputs/experiment \
-  --zarr-path data/kitchen_complete_from_minari.zarr
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
 **Opsi B — memanggil Python langsung:**
@@ -130,10 +130,10 @@ Folder akar adalah yang berisi **`scripts/`** dan **`FlowPolicy/`** (kode traini
 ```bash
 python scripts/run_experiment.py \
   --output-dir outputs/experiment \
-  --zarr-path data/kitchen_complete_from_minari.zarr
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
-Argumen `--zarr-path` **relatif terhadap `FlowPolicy/`** (direktori tempat `train.py`). Sesuaikan jika dataset Anda di lokasi lain (mis. path absolut).
+Argumen `--zarr-path` **relatif terhadap folder berisi `train.py`** (lihat `KitchenDataset._resolve_zarr_path`). Untuk dataset di `FlowPolicy/FlowPolicy/data/`, gunakan nilai `FlowPolicy/data/kitchen_complete_from_minari.zarr` atau path absolut.
 
 ### Hanya random search (tanpa baseline)
 
@@ -148,7 +148,7 @@ Skrip shell tersebut memakai urutan seed **`0` → `42` → `1010` → `0`** (em
 ```bash
 ./scripts/run_experiment_random_search.sh \
   --output-dir outputs/experiment_rs \
-  --zarr-path data/kitchen_complete_from_minari.zarr
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
 Argumen tambahan diteruskan ke `run_experiment.py` (misalnya `--max-batch-size 64 --dataloader-num-workers 2`).
@@ -158,7 +158,7 @@ Reproduksi grid sampling (seed sampling tetap):
 ```bash
 SAMPLING_SEED=99 ./scripts/run_experiment_random_search.sh \
   --output-dir outputs/experiment_rs \
-  --zarr-path data/kitchen_complete_from_minari.zarr
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
 **Opsi B — Python langsung** (parameter seed / sampling bisa Anda ubah):
@@ -171,7 +171,7 @@ python scripts/run_experiment.py \
   --n-configs 10 \
   --sampling-seed 99 \
   --output-dir outputs/experiment_rs \
-  --zarr-path data/kitchen_complete_from_minari.zarr
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
 Flag **`--baseline-only`** dan **`--random-search-only`** saling meniadakan; jangan dipakai bersamaan.
@@ -191,7 +191,7 @@ Contoh **konservatif (VRAM 16 GB)**:
 ```bash
 ./scripts/run_experiment.sh \
   --output-dir outputs/experiment \
-  --zarr-path data/kitchen_complete_from_minari.zarr \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
   --max-batch-size 64 \
   --dataloader-num-workers 2
 ```
@@ -201,7 +201,7 @@ Contoh **sedikit lebih agresif** (setelah 64 berjalan stabil):
 ```bash
 python scripts/run_experiment.py \
   --output-dir outputs/experiment \
-  --zarr-path data/kitchen_complete_from_minari.zarr \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
   --max-batch-size 96 \
   --dataloader-num-workers 4
 ```
@@ -223,7 +223,7 @@ Contoh **konservatif (VRAM 8 GB / laptop)**:
 ```bash
 ./scripts/run_experiment.sh \
   --output-dir outputs/experiment \
-  --zarr-path data/kitchen_complete_from_minari.zarr \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
   --max-batch-size 16 \
   --dataloader-num-workers 0
 ```
