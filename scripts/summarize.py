@@ -22,20 +22,28 @@ def summarize(output_dir: Path) -> None:
         print("Tidak ada baris status=ok untuk diagregasi.")
         return
 
-    metrics = [
-        "success_rate_k1",
-        "success_rate_k2",
-        "success_rate_k3",
-        "success_rate_k4",
-        "mean_inference_latency_ms",
-    ]
+    def _col(preferred: str, fallback: str) -> str:
+        return preferred if preferred in df.columns else fallback
+
+    k1, k2, k3 = _col("test_success_rate_k1", "success_rate_k1"), _col(
+        "test_success_rate_k2", "success_rate_k2"
+    ), _col("test_success_rate_k3", "success_rate_k3")
+    k4 = _col("test_success_rate_k4", "success_rate_k4")
+    lat = _col("test_mean_inference_latency_ms", "mean_inference_latency_ms")
+    to = _col("test_trade_off", "trade_off")
+
+    metrics = [k1, k2, k3, k4, lat]
     for m in metrics:
         df[m] = pd.to_numeric(df[m], errors="coerce")
 
     df["trade_off_computed"] = np.where(
-        df["mean_inference_latency_ms"] > 1e-9,
-        df["success_rate_k4"] / df["mean_inference_latency_ms"],
-        np.nan,
+        df[lat] > 1e-9,
+        df[k4] / df[lat],
+        np.where(
+            pd.to_numeric(df[to], errors="coerce").notna(),
+            pd.to_numeric(df[to], errors="coerce"),
+            np.nan,
+        ),
     )
 
     gcols = ["cfg_idx", "profile", "fold"]

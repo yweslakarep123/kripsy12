@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import wandb
 import time
 import numpy as np
@@ -115,10 +117,14 @@ class KitchenRunner(BaseRunner):
         warmup_predict_steps: int = 20,
         eval_seed: int = 0,
         log_video: bool = False,
+        n_episodes: int | None = None,
     ):
         """
         Evaluasi dengan warmup GPU, latensi per langkah predict_action, dan success k1–k4.
         Tidak mengandalkan W&B kecuali log_video=True (video terakhir).
+
+        Args:
+            n_episodes: Override jumlah episode evaluasi (default: ``self.eval_episodes``).
         """
         device = policy.device
         env = self.env
@@ -148,9 +154,10 @@ class KitchenRunner(BaseRunner):
         latencies_ms.clear()
 
         ep_success_levels = []
+        n_eps = int(self.eval_episodes if n_episodes is None else n_episodes)
 
         for episode_idx in tqdm.tqdm(
-            range(self.eval_episodes),
+            range(n_eps),
             desc=f"EvalMetrics FrankaKitchen {self.task_name}",
             leave=False,
             mininterval=self.tqdm_interval_sec,
@@ -187,14 +194,17 @@ class KitchenRunner(BaseRunner):
         sr = np.asarray(ep_success_levels, dtype=np.float64)
         mean_lat = float(np.mean(latencies_ms)) if latencies_ms else 0.0
         std_lat = float(np.std(latencies_ms)) if latencies_ms else 0.0
+        # Sukses penuh Kitchen-Complete (empat sub-tugas terurut) = level k4.
+        success_total_pct = float(sr[:, 3].mean() * 100.0)
         out = {
+            "success_rate_total": success_total_pct,
             "success_rate_k1": float(sr[:, 0].mean() * 100.0),
             "success_rate_k2": float(sr[:, 1].mean() * 100.0),
             "success_rate_k3": float(sr[:, 2].mean() * 100.0),
             "success_rate_k4": float(sr[:, 3].mean() * 100.0),
             "mean_inference_latency_ms": mean_lat,
             "std_inference_latency_ms": std_lat,
-            "n_infer_episodes": int(self.eval_episodes),
+            "n_infer_episodes": int(n_eps),
         }
         out["trade_off"] = (
             float(out["success_rate_k4"] / mean_lat) if mean_lat > 1e-9 else 0.0

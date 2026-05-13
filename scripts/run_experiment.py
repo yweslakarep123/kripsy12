@@ -2,11 +2,14 @@
 """
 Orkestrator eksperimen (tanpa k-fold):
 
-  1) Baseline — hyperparameter default × 3 seed × 2 preprocessing = 6 run
-  2) Random search — n_configs × len(--seeds) × len(--profiles) run (default 10×3×2=60)
+  1) Baseline — hyperparameter default × len(seeds) × len(profiles)
+  2) Pencarian hiperparameter — ``bayesian`` (default, GP + EI) atau ``random``
 
-Flag **`--baseline-only`** hanya menjalankan baseline (6 run default); random search dilewati.
-Flag **`--random-search-only`** hanya random search; baseline dilewati (tidak boleh bersamaan dengan ``--baseline-only``).
+Flag **`--baseline-only`** hanya baseline; fase pencarian dilewati.
+**`--random-search-only`** / **`--bayesian-search-only`** hanya fase pencarian (baseline dilewati).
+
+Metrik inferensi: fase train/val (sim, episode lebih sedikit) + fase test (episode utama),
+masing-masing dengan success total, k1–k4, latensi, trade-off; plus kolom legacy tanpa prefix (= test).
 
 Resume: metrik lengkap (metrics.json atau baris results.csv status=ok) dilewati;
 training terputus dilanjutkan (resume Hydra) jika ada latest.ckpt tanpa training_final.json;
@@ -37,9 +40,13 @@ from cv_splits import build_single_train_val_split, save_splits  # noqa: E402
 from experiment_constants import (  # noqa: E402
     BASELINE_CFG_IDX,
     CSV_HPARAM_KEYS,
+    RESULTS_CSV_METRIC_COLUMNS,
     SEARCH_SPACE,
     baseline_config_dict,
     compute_horizon,
+    config_vector_to_dict,
+    empty_metrics_row,
+    metrics_row_from_infer_json,
     sample_configs,
 )
 
@@ -63,22 +70,30 @@ def load_or_create_config_bundle(
     sampling_seed: int,
     n_configs: int,
     max_batch: int,
+    *,
+    search_mode: str,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    """Return (baseline_cfg, sampled_cfgs). Migrasi dari JSON array lama → objek {baseline, sampled}."""
+    """
+    Return ``(baseline_cfg, sampled_cfgs)``.
+
+    - ``search_mode == "random"``: ``sampled`` berisi ``n_configs`` sampel sekaligus (``version`` 2).
+    - ``search_mode == "bayesian"``: ``sampled`` boleh kosong lalu diisi per trial (``version`` 3).
+    """
     baseline = apply_vram_limits(baseline_config_dict(), max_batch)
+    sm = str(search_mode).lower()
+    if sm not in ("random", "bayesian"):
+        raise ValueError(f"search_mode tidak valid: {search_mode}")
 
     raw: Any = None
     if configs_path.is_file():
         text = configs_path.read_text(encoding="utf-8").strip()
         if not text:
-            print("[warn] configs.json kosong; akan dibuat ulang dari baseline + random search.")
+            print("[warn] configs.json kosong; akan dibuat ulang.")
         else:
             try:
                 raw = json.loads(text)
             except json.JSONDecodeError as e:
-                print(
-                    f"[warn] configs.json bukan JSON valid ({e}); akan dibuat ulang dari baseline + random search."
-                )
+                print(f"[warn] configs.json bukan JSON valid ({e}); akan dibuat ulang.")
 
     if raw is not None:
         if isinstance(raw, list):
@@ -93,19 +108,51 @@ def load_or_create_config_bundle(
         if isinstance(raw, dict) and "sampled" in raw:
             b = raw.get("baseline")
             if isinstance(b, dict):
-                baseline = apply_vram_limits({**baseline, **b, "cfg_idx": BASELINE_CFG_IDX}, max_batch)
+                baseline = apply_vram_limits(
+                    {**baseline, **b, "cfg_idx": BASELINE_CFG_IDX}, max_batch
+                )
             sampled = [
                 apply_vram_limits(dict(x), max_batch) for x in raw["sampled"]
             ]
             return baseline, sampled
 
+    configs_path.parent.mkdir(parents=True, exist_ok=True)
+    if sm == "bayesian":
+        bundle = {
+            "version": 3,
+            "search_mode": "bayesian",
+            "baseline": baseline,
+            "sampled": [],
+        }
+        with open(configs_path, "w") as f:
+            json.dump(bundle, f, indent=2)
+        return baseline, []
+
     rng = np.random.RandomState(sampling_seed)
     sampled = [apply_vram_limits(c, max_batch) for c in sample_configs(rng, n_configs)]
-    bundle = {"version": 2, "baseline": baseline, "sampled": sampled}
-    configs_path.parent.mkdir(parents=True, exist_ok=True)
+    bundle = {"version": 2, "search_mode": "random", "baseline": baseline, "sampled": sampled}
     with open(configs_path, "w") as f:
         json.dump(bundle, f, indent=2)
     return baseline, sampled
+
+
+def write_config_bundle(
+    configs_path: pathlib.Path,
+    baseline: Dict[str, Any],
+    sampled: List[Dict[str, Any]],
+    *,
+    search_mode: str,
+) -> None:
+    sm = str(search_mode).lower()
+    bundle: Dict[str, Any] = {
+        "version": 3 if sm == "bayesian" else 2,
+        "search_mode": sm,
+        "baseline": baseline,
+        "sampled": sampled,
+    }
+    configs_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(configs_path, "w") as f:
+        json.dump(bundle, f, indent=2)
 
 
 def build_train_overrides(
@@ -192,14 +239,8 @@ def append_results_csv(
     fieldnames = (
         ["cfg_idx", "seed", "profile", "fold"]
         + hp_cols
+        + list(RESULTS_CSV_METRIC_COLUMNS)
         + [
-            "success_rate_k1",
-            "success_rate_k2",
-            "success_rate_k3",
-            "success_rate_k4",
-            "mean_inference_latency_ms",
-            "std_inference_latency_ms",
-            "trade_off",
             "train_loss_final",
             "val_loss_final",
             "n_infer_episodes",
@@ -263,6 +304,7 @@ def sync_csv_from_metrics_if_needed(
     with open(metrics_path) as f:
         met = json.load(f)
     tr_l, va_l = load_training_final(run_dir)
+    mrow = metrics_row_from_infer_json(met)
     append_results_csv(
         results_csv,
         {
@@ -271,16 +313,13 @@ def sync_csv_from_metrics_if_needed(
             "profile": profile,
             "fold": fold_i,
             **{k: cfg[k] for k in hp_cols},
-            "success_rate_k1": met.get("success_rate_k1"),
-            "success_rate_k2": met.get("success_rate_k2"),
-            "success_rate_k3": met.get("success_rate_k3"),
-            "success_rate_k4": met.get("success_rate_k4"),
-            "mean_inference_latency_ms": met.get("mean_inference_latency_ms"),
-            "std_inference_latency_ms": met.get("std_inference_latency_ms"),
-            "trade_off": met.get("trade_off"),
+            **mrow,
             "train_loss_final": tr_l,
             "val_loss_final": va_l,
-            "n_infer_episodes": met.get("n_infer_episodes"),
+            "n_infer_episodes": met.get(
+                "test_n_infer_episodes",
+                met.get("n_infer_episodes"),
+            ),
             "checkpoint_path": str(ckpt_path),
             "status": "skipped_resume",
         },
@@ -297,25 +336,29 @@ def run_infer_subprocess(
     metrics_path: pathlib.Path,
     n_infer_episodes: int,
     seed: int,
+    *,
+    n_train_val_episodes: int,
+    train_val_eval_seed_offset: int,
 ) -> int:
-    return subprocess.run(
-        [
-            py,
-            str(infer_py),
-            "--checkpoint",
-            str(ckpt_path),
-            "--metrics-json",
-            str(metrics_path),
-            "--n-infer-episodes",
-            str(n_infer_episodes),
-            "--seed",
-            str(seed),
-            "--warmup-steps",
-            "20",
-        ],
-        cwd=cwd_train,
-        env=env,
-    ).returncode
+    cmd = [
+        py,
+        str(infer_py),
+        "--checkpoint",
+        str(ckpt_path),
+        "--metrics-json",
+        str(metrics_path),
+        "--n-train-val-episodes",
+        str(int(n_train_val_episodes)),
+        "--train-val-eval-seed-offset",
+        str(int(train_val_eval_seed_offset)),
+        "--n-infer-episodes",
+        str(n_infer_episodes),
+        "--seed",
+        str(seed),
+        "--warmup-steps",
+        "20",
+    ]
+    return subprocess.run(cmd, cwd=cwd_train, env=env).returncode
 
 
 def execute_one_job(
@@ -338,6 +381,8 @@ def execute_one_job(
     n_infer_episodes: int,
     checkpoint_every: int,
     dataloader_num_workers: int,
+    n_train_val_episodes: int,
+    train_val_eval_seed_offset: int,
 ) -> None:
     run_dir = runs_root / run_name
     metrics_path = run_dir / "metrics.json"
@@ -385,6 +430,8 @@ def execute_one_job(
             metrics_path,
             n_infer_episodes,
             seed,
+            n_train_val_episodes=n_train_val_episodes,
+            train_val_eval_seed_offset=train_val_eval_seed_offset,
         )
         tr_l, va_l = load_training_final(run_dir)
         if rc != 0 or not metrics_path.is_file():
@@ -396,13 +443,7 @@ def execute_one_job(
                     "profile": profile,
                     "fold": fold_i,
                     **{k: cfg[k] for k in hp_cols},
-                    "success_rate_k1": "",
-                    "success_rate_k2": "",
-                    "success_rate_k3": "",
-                    "success_rate_k4": "",
-                    "mean_inference_latency_ms": "",
-                    "std_inference_latency_ms": "",
-                    "trade_off": "",
+                    **empty_metrics_row(),
                     "train_loss_final": tr_l,
                     "val_loss_final": va_l,
                     "n_infer_episodes": n_infer_episodes,
@@ -414,6 +455,7 @@ def execute_one_job(
             return
         with open(metrics_path) as f:
             met = json.load(f)
+        mrow = metrics_row_from_infer_json(met)
         append_results_csv(
             results_csv,
             {
@@ -422,16 +464,13 @@ def execute_one_job(
                 "profile": profile,
                 "fold": fold_i,
                 **{k: cfg[k] for k in hp_cols},
-                "success_rate_k1": met.get("success_rate_k1"),
-                "success_rate_k2": met.get("success_rate_k2"),
-                "success_rate_k3": met.get("success_rate_k3"),
-                "success_rate_k4": met.get("success_rate_k4"),
-                "mean_inference_latency_ms": met.get("mean_inference_latency_ms"),
-                "std_inference_latency_ms": met.get("std_inference_latency_ms"),
-                "trade_off": met.get("trade_off"),
+                **mrow,
                 "train_loss_final": tr_l,
                 "val_loss_final": va_l,
-                "n_infer_episodes": met.get("n_infer_episodes", n_infer_episodes),
+                "n_infer_episodes": met.get(
+                    "test_n_infer_episodes",
+                    met.get("n_infer_episodes", n_infer_episodes),
+                ),
                 "checkpoint_path": str(ckpt_path),
                 "status": "ok",
             },
@@ -459,7 +498,11 @@ def execute_one_job(
         dataloader_num_workers=dataloader_num_workers,
     )
 
-    phase = "BASELINE (default)" if cfg_idx == BASELINE_CFG_IDX else f"Random search cfg_idx={cfg_idx}"
+    phase = (
+        "BASELINE (default)"
+        if cfg_idx == BASELINE_CFG_IDX
+        else f"Pencarian hiperparameter cfg_idx={cfg_idx}"
+    )
     print_run_configuration(
         f"[train] {run_name}  |  {phase}",
         cfg,
@@ -477,13 +520,7 @@ def execute_one_job(
                 "profile": profile,
                 "fold": fold_i,
                 **{k: cfg[k] for k in hp_cols},
-                "success_rate_k1": "",
-                "success_rate_k2": "",
-                "success_rate_k3": "",
-                "success_rate_k4": "",
-                "mean_inference_latency_ms": "",
-                "std_inference_latency_ms": "",
-                "trade_off": "",
+                **empty_metrics_row(),
                 "train_loss_final": "",
                 "val_loss_final": "",
                 "n_infer_episodes": "",
@@ -503,13 +540,7 @@ def execute_one_job(
                 "profile": profile,
                 "fold": fold_i,
                 **{k: cfg[k] for k in hp_cols},
-                "success_rate_k1": "",
-                "success_rate_k2": "",
-                "success_rate_k3": "",
-                "success_rate_k4": "",
-                "mean_inference_latency_ms": "",
-                "std_inference_latency_ms": "",
-                "trade_off": "",
+                **empty_metrics_row(),
                 "train_loss_final": "",
                 "val_loss_final": "",
                 "n_infer_episodes": "",
@@ -540,6 +571,8 @@ def execute_one_job(
         metrics_path,
         n_infer_episodes,
         seed,
+        n_train_val_episodes=n_train_val_episodes,
+        train_val_eval_seed_offset=train_val_eval_seed_offset,
     )
     tr_l, va_l = load_training_final(run_dir)
     if r2 != 0 or not metrics_path.is_file():
@@ -551,13 +584,7 @@ def execute_one_job(
                 "profile": profile,
                 "fold": fold_i,
                 **{k: cfg[k] for k in hp_cols},
-                "success_rate_k1": "",
-                "success_rate_k2": "",
-                "success_rate_k3": "",
-                "success_rate_k4": "",
-                "mean_inference_latency_ms": "",
-                "std_inference_latency_ms": "",
-                "trade_off": "",
+                **empty_metrics_row(),
                 "train_loss_final": tr_l,
                 "val_loss_final": va_l,
                 "n_infer_episodes": n_infer_episodes,
@@ -570,7 +597,7 @@ def execute_one_job(
 
     with open(metrics_path) as f:
         met = json.load(f)
-
+    mrow = metrics_row_from_infer_json(met)
     append_results_csv(
         results_csv,
         {
@@ -579,16 +606,13 @@ def execute_one_job(
             "profile": profile,
             "fold": fold_i,
             **{k: cfg[k] for k in hp_cols},
-            "success_rate_k1": met.get("success_rate_k1"),
-            "success_rate_k2": met.get("success_rate_k2"),
-            "success_rate_k3": met.get("success_rate_k3"),
-            "success_rate_k4": met.get("success_rate_k4"),
-            "mean_inference_latency_ms": met.get("mean_inference_latency_ms"),
-            "std_inference_latency_ms": met.get("std_inference_latency_ms"),
-            "trade_off": met.get("trade_off"),
+            **mrow,
             "train_loss_final": tr_l,
             "val_loss_final": va_l,
-            "n_infer_episodes": met.get("n_infer_episodes", n_infer_episodes),
+            "n_infer_episodes": met.get(
+                "test_n_infer_episodes",
+                met.get("n_infer_episodes", n_infer_episodes),
+            ),
             "checkpoint_path": str(ckpt_path),
             "status": "ok",
         },
@@ -606,7 +630,8 @@ def main():
         "--n-configs",
         type=int,
         default=10,
-        help="Jumlah sample random search; total run RS = n-configs × jumlah seed × jumlah profil (default 10×3×2=60).",
+        help="Jumlah konfigurasi pencarian (random: disampling sekaligus; "
+        "bayesian: jumlah trial BO berurutan). Total run ≈ n × |seeds| × |profiles|.",
     )
     ap.add_argument("--sampling-seed", type=int, default=99)
     ap.add_argument(
@@ -647,6 +672,37 @@ def main():
         help="Hanya random search (tanpa baseline).",
     )
     ap.add_argument(
+        "--bayesian-search-only",
+        action="store_true",
+        help="Hanya optimasi Bayesian (tanpa baseline).",
+    )
+    ap.add_argument(
+        "--hyperparam-search",
+        type=str,
+        choices=("bayesian", "random"),
+        default="bayesian",
+        help="Strategi pencarian hiperparameter setelah baseline (default: bayesian).",
+    )
+    ap.add_argument(
+        "--bo-objective",
+        type=str,
+        choices=("neg_trade_off", "neg_k4"),
+        default="neg_trade_off",
+        help="BO meminimalkan -mean(test_trade_off) atau -mean(test success k4).",
+    )
+    ap.add_argument(
+        "--n-train-val-episodes",
+        type=int,
+        default=15,
+        help="Episode simulasi untuk metrik fase train/val (infer_kitchen); 0 = lewati.",
+    )
+    ap.add_argument(
+        "--train-val-eval-seed-offset",
+        type=int,
+        default=31,
+        help="Offset seed eval train/val vs test (infer_kitchen).",
+    )
+    ap.add_argument(
         "--checkpoint-every",
         type=int,
         default=200,
@@ -655,6 +711,19 @@ def main():
     args = ap.parse_args()
     if args.baseline_only and args.random_search_only:
         ap.error("--baseline-only dan --random-search-only saling meniadakan.")
+    if args.baseline_only and args.bayesian_search_only:
+        ap.error("--baseline-only dan --bayesian-search-only saling meniadakan.")
+    if args.random_search_only and args.bayesian_search_only:
+        ap.error("--random-search-only dan --bayesian-search-only saling meniadakan.")
+    if args.random_search_only:
+        eff_search = "random"
+    elif args.bayesian_search_only:
+        eff_search = "bayesian"
+    else:
+        eff_search = str(args.hyperparam_search)
+
+    bundle_sm = "random" if args.baseline_only else eff_search
+
     # #region agent log
     try:
         _dbg = REPO_ROOT / ".cursor" / "debug-223216.log"
@@ -672,6 +741,8 @@ def main():
                             "output_dir": args.output_dir,
                             "baseline_only": bool(args.baseline_only),
                             "random_search_only": bool(args.random_search_only),
+                            "bayesian_search_only": bool(args.bayesian_search_only),
+                            "hyperparam_search": eff_search,
                             "checkpoint_every": args.checkpoint_every,
                         },
                         "timestamp": int(time.time() * 1000),
@@ -698,6 +769,7 @@ def main():
         args.sampling_seed,
         args.n_configs,
         args.max_batch_size,
+        search_mode=bundle_sm,
     )
 
     fold_entry = build_single_train_val_split(
@@ -718,6 +790,7 @@ def main():
             "cv_seed": args.cv_seed,
             "sampling_seed": args.sampling_seed,
             "max_batch_size": args.max_batch_size,
+            "hyperparam_search": eff_search,
         },
     )
 
@@ -729,19 +802,33 @@ def main():
     split_fold_idx = int(fold_entry["fold"])
 
     n_base = len(args.seeds) * len(args.profiles)
-    n_rs = len(args.seeds) * len(args.profiles) * len(sampled_cfgs)
+    n_search_planned = int(args.n_configs) * len(args.seeds) * len(args.profiles)
+    n_rs_done = len(args.seeds) * len(args.profiles) * len(sampled_cfgs)
+    search_label = (
+        "optimasi Bayesian (GP + EI)"
+        if eff_search == "bayesian"
+        else "random search"
+    )
     if args.baseline_only:
         print(
             "\n>>> Mode --baseline-only: hanya baseline "
-            f"({n_base} run). Random search dilewati.\n"
+            f"({n_base} run). Fase pencarian hiperparameter dilewati.\n"
             "    Satu partisi train/val, tanpa k-fold.\n"
             f"    VRAM: max_batch_size={args.max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
         )
     elif args.random_search_only:
         print(
-            "\n>>> Mode --random-search-only: hanya random search "
-            f"({n_rs} run). Baseline dilewati.\n"
+            f"\n>>> Mode --random-search-only: hanya {search_label} "
+            f"({n_rs_done} run). Baseline dilewati.\n"
+            "    Satu partisi train/val, tanpa k-fold.\n"
+            f"    VRAM: max_batch_size={args.max_batch_size}, "
+            f"num_workers={args.dataloader_num_workers}\n"
+        )
+    elif args.bayesian_search_only:
+        print(
+            f"\n>>> Mode --bayesian-search-only: hanya {search_label} "
+            f"(hingga {n_search_planned} run terjadwal).\n"
             "    Satu partisi train/val, tanpa k-fold.\n"
             f"    VRAM: max_batch_size={args.max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
@@ -749,8 +836,8 @@ def main():
     else:
         print(
             "\n>>> Urutan: (1) Baseline "
-            f"({n_base} run) → (2) Random search "
-            f"({n_rs} run). "
+            f"({n_base} run) → (2) {search_label} "
+            f"(hingga {n_search_planned} run). "
             "Satu partisi train/val, tanpa k-fold.\n"
             f"    VRAM: max_batch_size={args.max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
@@ -784,15 +871,63 @@ def main():
                         n_infer_episodes=args.n_infer_episodes,
                         checkpoint_every=args.checkpoint_every,
                         dataloader_num_workers=args.dataloader_num_workers,
+                        n_train_val_episodes=args.n_train_val_episodes,
+                        train_val_eval_seed_offset=args.train_val_eval_seed_offset,
                     )
+
+    def run_bayesian_trials() -> None:
+        from bo_search import (
+            aggregate_objective_from_results_csv,
+            ask_next_config,
+            ensure_optimizer_matches_sampled,
+            save_optimizer,
+            tell_objective,
+        )
+
+        obj_mode = (
+            "neg_test_trade_off"
+            if args.bo_objective == "neg_trade_off"
+            else "neg_test_success_rate_k4"
+        )
+        n_init = min(max(2, args.n_configs // 2), 6)
+        opt = ensure_optimizer_matches_sampled(
+            out_root,
+            sampled_cfgs,
+            results_csv,
+            args.seeds,
+            args.profiles,
+            random_state=args.sampling_seed,
+            n_initial_points=n_init,
+            objective_mode=obj_mode,
+        )
+        for t in range(len(sampled_cfgs), int(args.n_configs)):
+            x = ask_next_config(opt)
+            cfg = apply_vram_limits(
+                config_vector_to_dict(list(x), t), args.max_batch_size
+            )
+            run_grid_for_configs([cfg])
+            y = aggregate_objective_from_results_csv(
+                results_csv, t, args.seeds, args.profiles, mode=obj_mode
+            )
+            tell_objective(opt, list(x), y)
+            save_optimizer(opt, out_root)
+            sampled_cfgs.append(cfg)
+            write_config_bundle(
+                configs_path, baseline_cfg, sampled_cfgs, search_mode="bayesian"
+            )
 
     if args.baseline_only:
         run_grid_for_configs([baseline_cfg])
     elif args.random_search_only:
         run_grid_for_configs(sampled_cfgs)
+    elif args.bayesian_search_only:
+        run_bayesian_trials()
     else:
         run_grid_for_configs([baseline_cfg])
-        run_grid_for_configs(sampled_cfgs)
+        if eff_search == "bayesian":
+            run_bayesian_trials()
+        else:
+            run_grid_for_configs(sampled_cfgs)
 
     summarize_script = SCRIPT_DIR / "summarize.py"
     plot_script = SCRIPT_DIR / "plot_results.py"

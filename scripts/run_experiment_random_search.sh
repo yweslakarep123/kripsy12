@@ -16,6 +16,7 @@ fi
 
 exec python3 scripts/run_experiment.py \
   --random-search-only \
+  --hyperparam-search random \
   --seeds 0 42 1010 0 \
   --profiles standard minimal \
   --n-configs 10 \

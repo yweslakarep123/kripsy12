@@ -16,6 +16,19 @@ import pandas as pd  # noqa: E402
 from experiment_constants import SEARCH_SPACE  # noqa: E402
 
 
+def _pick_col(df: pd.DataFrame, preferred: str, fallback: str) -> str:
+    return preferred if preferred in df.columns else fallback
+
+
+def _success_mean_cols(summary: pd.DataFrame) -> list[str]:
+    cols = []
+    for i in range(1, 5):
+        tp = f"test_success_rate_k{i}_mean"
+        lp = f"success_rate_k{i}_mean"
+        cols.append(tp if tp in summary.columns else lp)
+    return cols
+
+
 def _save(fig, path_base: Path):
     fig.savefig(path_base.with_suffix(".png"), dpi=150, bbox_inches="tight")
     fig.savefig(path_base.with_suffix(".pdf"), bbox_inches="tight")
@@ -24,6 +37,8 @@ def _save(fig, path_base: Path):
 
 def plot_tradeoff_scatter(df_ok: pd.DataFrame, out_dir: Path):
     """Satu titik per (profile, cfg_idx); error bar = std lintas seed."""
+    lat_c = _pick_col(df_ok, "test_mean_inference_latency_ms", "mean_inference_latency_ms")
+    k4_c = _pick_col(df_ok, "test_success_rate_k4", "success_rate_k4")
     fig, ax = plt.subplots(figsize=(9, 6))
     markers = {"standard": "o", "minimal": "s"}
     profiles = df_ok["profile"].unique()
@@ -35,8 +50,8 @@ def plot_tradeoff_scatter(df_ok: pd.DataFrame, out_dir: Path):
             ]
             if len(sub) < 1:
                 continue
-            per_seed_lat = sub.groupby("seed")["mean_inference_latency_ms"].mean()
-            per_seed_sr = sub.groupby("seed")["success_rate_k4"].mean()
+            per_seed_lat = sub.groupby("seed")[lat_c].mean()
+            per_seed_sr = sub.groupby("seed")[k4_c].mean()
             mx = float(per_seed_lat.mean())
             my = float(per_seed_sr.mean())
             ex = float(per_seed_lat.std(ddof=0)) if len(per_seed_lat) > 1 else 0.0
@@ -52,8 +67,8 @@ def plot_tradeoff_scatter(df_ok: pd.DataFrame, out_dir: Path):
                 alpha=0.8,
                 capsize=2,
             )
-    ax.set_xlabel("mean_inference_latency_ms")
-    ax.set_ylabel("success_rate_k4 (%)")
+    ax.set_xlabel(lat_c)
+    ax.set_ylabel(f"{k4_c} (%)")
     ax.set_title("Trade-off scatter (titik = cfg×profile; batang = std seeds)")
     handles, labels = ax.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
@@ -64,12 +79,7 @@ def plot_tradeoff_scatter(df_ok: pd.DataFrame, out_dir: Path):
 
 def plot_success_bars(summary: pd.DataFrame, results_ok: pd.DataFrame, out_dir: Path):
     """Top-10 cfg_idx by trade_off_mean per profile — batang k1–k4."""
-    metric_cols = [
-        "success_rate_k1_mean",
-        "success_rate_k2_mean",
-        "success_rate_k3_mean",
-        "success_rate_k4_mean",
-    ]
+    metric_cols = _success_mean_cols(summary)
     fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
     for ax, profile in zip(axes, ["standard", "minimal"]):
         sub = summary[summary["profile"] == profile]
@@ -109,6 +119,7 @@ def plot_cv_box(summary: pd.DataFrame, results_ok: pd.DataFrame, out_dir: Path):
     colors = []
     pos = 0
     cmap = {"standard": "#1f77b4", "minimal": "#ff7f0e"}
+    k4_c = _pick_col(results_ok, "test_success_rate_k4", "success_rate_k4")
     for cfg_idx in top_cfg:
         for profile in ["standard", "minimal"]:
             sub = results_ok[
@@ -117,7 +128,7 @@ def plot_cv_box(summary: pd.DataFrame, results_ok: pd.DataFrame, out_dir: Path):
             ]
             if len(sub) < 2:
                 continue
-            data.append(sub["success_rate_k4"].astype(float).values)
+            data.append(sub[k4_c].astype(float).values)
             positions.append(pos)
             colors.append(cmap.get(profile, "gray"))
             pos += 1
@@ -127,7 +138,7 @@ def plot_cv_box(summary: pd.DataFrame, results_ok: pd.DataFrame, out_dir: Path):
         for patch, c in zip(bp["boxes"], colors):
             patch.set_facecolor(c)
             patch.set_alpha(0.55)
-    ax.set_ylabel("success_rate_k4")
+    ax.set_ylabel(k4_c)
     ax.set_title("Seed variance (top-5 cfg_idx by trade_off)")
     ax.grid(True, axis="y", alpha=0.3)
     _save(fig, out_dir / "cv_fold_variance")
@@ -136,6 +147,8 @@ def plot_cv_box(summary: pd.DataFrame, results_ok: pd.DataFrame, out_dir: Path):
 def plot_hparam_sensitivity(results_ok: pd.DataFrame, out_dir: Path):
     hp_keys = list(SEARCH_SPACE.keys())
     profiles = ["standard", "minimal"]
+    lat_c = _pick_col(results_ok, "test_mean_inference_latency_ms", "mean_inference_latency_ms")
+    k4_c = _pick_col(results_ok, "test_success_rate_k4", "success_rate_k4")
     n_hp = len(hp_keys)
     ncols = 3
     nrows = int(np.ceil(n_hp / ncols))
@@ -149,9 +162,8 @@ def plot_hparam_sensitivity(results_ok: pd.DataFrame, out_dir: Path):
                 continue
             sub[hp] = pd.to_numeric(sub[hp], errors="coerce")
             sub["to"] = np.where(
-                sub["mean_inference_latency_ms"].astype(float) > 1e-9,
-                sub["success_rate_k4"].astype(float)
-                / sub["mean_inference_latency_ms"].astype(float),
+                sub[lat_c].astype(float) > 1e-9,
+                sub[k4_c].astype(float) / sub[lat_c].astype(float),
                 np.nan,
             )
             g = sub.groupby(hp, as_index=False)["to"].mean().sort_values(hp)
@@ -195,11 +207,9 @@ def main():
         print("Tidak ada data status=ok untuk plot.")
         return
 
-    for c in [
-        "success_rate_k4",
-        "mean_inference_latency_ms",
-        "cfg_idx",
-    ]:
+    lat_c = _pick_col(df_ok, "test_mean_inference_latency_ms", "mean_inference_latency_ms")
+    k4_c = _pick_col(df_ok, "test_success_rate_k4", "success_rate_k4")
+    for c in [k4_c, lat_c, "cfg_idx"]:
         df_ok[c] = pd.to_numeric(df_ok[c], errors="coerce")
 
     plot_tradeoff_scatter(df_ok, plots)

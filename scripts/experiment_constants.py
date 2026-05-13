@@ -61,3 +61,127 @@ def sample_configs(rng: np.random.RandomState, n: int) -> List[Dict[str, Any]]:
             d[k] = choices[int(rng.randint(0, len(choices)))]
         out.append(d)
     return out
+
+
+def config_vector_to_dict(x: List[Any], cfg_idx: int) -> Dict[str, Any]:
+    """Satu titik ruang pencarian (urutan = CSV_HPARAM_KEYS) → dict cfg Hydra."""
+    d: Dict[str, Any] = {"cfg_idx": int(cfg_idx)}
+    for k, v in zip(CSV_HPARAM_KEYS, x):
+        d[k] = v
+    return d
+
+
+def config_dict_to_vector(cfg: Dict[str, Any]) -> List[Any]:
+    return [cfg[k] for k in CSV_HPARAM_KEYS]
+
+
+# Kolom tambahan results.csv (metrik infer dua fase + alias kompatibel).
+RESULTS_CSV_METRIC_COLUMNS = [
+    "train_val_success_rate_total",
+    "train_val_success_rate_k1",
+    "train_val_success_rate_k2",
+    "train_val_success_rate_k3",
+    "train_val_success_rate_k4",
+    "train_val_mean_inference_latency_ms",
+    "train_val_std_inference_latency_ms",
+    "train_val_trade_off",
+    "train_val_n_infer_episodes",
+    "test_success_rate_total",
+    "test_success_rate_k1",
+    "test_success_rate_k2",
+    "test_success_rate_k3",
+    "test_success_rate_k4",
+    "test_mean_inference_latency_ms",
+    "test_std_inference_latency_ms",
+    "test_trade_off",
+    "test_n_infer_episodes",
+    "success_rate_total",
+    "success_rate_k1",
+    "success_rate_k2",
+    "success_rate_k3",
+    "success_rate_k4",
+    "mean_inference_latency_ms",
+    "std_inference_latency_ms",
+    "trade_off",
+]
+
+
+def metrics_row_from_infer_json(met: Dict[str, Any]) -> Dict[str, Any]:
+    """Isi kolom metrik CSV dari metrics.json (format baru bertahap atau legacy)."""
+
+    def pick(*names: str, default: Any = "") -> Any:
+        for n in names:
+            if n in met and met[n] is not None:
+                return met[n]
+        return default
+
+    has_tv = "train_val_success_rate_k1" in met
+
+    row: Dict[str, Any] = {}
+    if has_tv:
+        row["train_val_success_rate_total"] = pick("train_val_success_rate_total")
+        row["train_val_success_rate_k1"] = pick("train_val_success_rate_k1")
+        row["train_val_success_rate_k2"] = pick("train_val_success_rate_k2")
+        row["train_val_success_rate_k3"] = pick("train_val_success_rate_k3")
+        row["train_val_success_rate_k4"] = pick("train_val_success_rate_k4")
+        row["train_val_mean_inference_latency_ms"] = pick(
+            "train_val_mean_inference_latency_ms"
+        )
+        row["train_val_std_inference_latency_ms"] = pick(
+            "train_val_std_inference_latency_ms"
+        )
+        row["train_val_trade_off"] = pick("train_val_trade_off")
+        row["train_val_n_infer_episodes"] = pick("train_val_n_infer_episodes")
+    else:
+        for c in (
+            "train_val_success_rate_total",
+            "train_val_success_rate_k1",
+            "train_val_success_rate_k2",
+            "train_val_success_rate_k3",
+            "train_val_success_rate_k4",
+            "train_val_mean_inference_latency_ms",
+            "train_val_std_inference_latency_ms",
+            "train_val_trade_off",
+            "train_val_n_infer_episodes",
+        ):
+            row[c] = ""
+
+    row["test_success_rate_total"] = pick(
+        "test_success_rate_total", "success_rate_total"
+    )
+    row["test_success_rate_k1"] = pick("test_success_rate_k1", "success_rate_k1")
+    row["test_success_rate_k2"] = pick("test_success_rate_k2", "success_rate_k2")
+    row["test_success_rate_k3"] = pick("test_success_rate_k3", "success_rate_k3")
+    row["test_success_rate_k4"] = pick("test_success_rate_k4", "success_rate_k4")
+    row["test_mean_inference_latency_ms"] = pick(
+        "test_mean_inference_latency_ms", "mean_inference_latency_ms"
+    )
+    row["test_std_inference_latency_ms"] = pick(
+        "test_std_inference_latency_ms", "std_inference_latency_ms"
+    )
+    row["test_trade_off"] = pick("test_trade_off", "trade_off")
+    row["test_n_infer_episodes"] = pick(
+        "test_n_infer_episodes", "n_infer_episodes"
+    )
+
+    row["success_rate_total"] = pick(
+        "success_rate_total", "test_success_rate_total"
+    )
+    row["success_rate_k1"] = pick("success_rate_k1", "test_success_rate_k1")
+    row["success_rate_k2"] = pick("success_rate_k2", "test_success_rate_k2")
+    row["success_rate_k3"] = pick("success_rate_k3", "test_success_rate_k3")
+    row["success_rate_k4"] = pick("success_rate_k4", "test_success_rate_k4")
+    row["mean_inference_latency_ms"] = pick(
+        "mean_inference_latency_ms", "test_mean_inference_latency_ms"
+    )
+    row["std_inference_latency_ms"] = pick(
+        "std_inference_latency_ms", "test_std_inference_latency_ms"
+    )
+    row["trade_off"] = pick("trade_off", "test_trade_off")
+
+    return row
+
+
+def empty_metrics_row() -> Dict[str, Any]:
+    """Nilai kosong untuk semua kolom metrik results.csv."""
+    return {k: "" for k in RESULTS_CSV_METRIC_COLUMNS}

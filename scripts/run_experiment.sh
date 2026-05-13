@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Eksperimen penuh: 6 baseline + 60 random search = 66 run (default).
+# Eksperimen penuh: baseline lalu pencarian hiperparameter (default: optimasi Bayesian).
 # Dari akar repositori: ./scripts/run_experiment.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

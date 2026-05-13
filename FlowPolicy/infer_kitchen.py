@@ -1,6 +1,10 @@
 """
 Inferensi Franka Kitchen dengan metrik k1–k4, latensi, dan trade_off (tanpa Hydra CLI).
 
+Dua fase evaluasi simulasi (sama-sama forward policy / "inferensi"):
+  - train_val: episode lebih sedikit, seed eval terpisah (proxy cek pasca-training).
+  - test: episode utama (metrik "testing" / laporan).
+
 Contoh:
   python infer_kitchen.py --checkpoint runs/foo/checkpoints/latest.ckpt \\
     --metrics-json runs/foo/metrics.json --n-infer-episodes 50 --seed 42
@@ -25,13 +29,56 @@ if __name__ == "__main__":
 from train import TrainFlowPolicyWorkspace  # noqa: E402
 
 
+def _prefix_metrics(prefix: str, m: dict) -> dict:
+    out = {}
+    for k, v in m.items():
+        if k == "sim_video_eval":
+            continue
+        out[f"{prefix}_{k}"] = v
+    return out
+
+
+def _legacy_from_test(test: dict) -> dict:
+    """Kunci tanpa prefix (kompatibel parser lama) = fase test / inferensi utama."""
+    return {
+        "success_rate_total": test.get("success_rate_total"),
+        "success_rate_k1": test.get("success_rate_k1"),
+        "success_rate_k2": test.get("success_rate_k2"),
+        "success_rate_k3": test.get("success_rate_k3"),
+        "success_rate_k4": test.get("success_rate_k4"),
+        "mean_inference_latency_ms": test.get("mean_inference_latency_ms"),
+        "std_inference_latency_ms": test.get("std_inference_latency_ms"),
+        "n_infer_episodes": test.get("n_infer_episodes"),
+        "trade_off": test.get("trade_off"),
+    }
+
+
+def _merge_phases(train_val: dict, test: dict) -> dict:
+    """Flat JSON: train_val_* , test_* , plus alias tanpa prefix = test."""
+    tv = _prefix_metrics("train_val", train_val)
+    te = _prefix_metrics("test", test)
+    return {**tv, **te, **_legacy_from_test(test)}
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", type=str, required=True)
     p.add_argument("--metrics-json", type=str, required=True)
+    p.add_argument(
+        "--n-train-val-episodes",
+        type=int,
+        default=15,
+        help="Episode eval fase train/val (sim); 0 = lewati fase ini.",
+    )
     p.add_argument("--n-infer-episodes", type=int, default=50)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--warmup-steps", type=int, default=20)
+    p.add_argument(
+        "--train-val-eval-seed-offset",
+        type=int,
+        default=31,
+        help="Offset seed eval train/val vs test agar episode tidak identik.",
+    )
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -49,19 +96,32 @@ def main():
     import hydra
 
     out_parent = str(ckpt.parent.parent)
+    n_max = max(int(args.n_train_val_episodes), int(args.n_infer_episodes))
     runner = hydra.utils.instantiate(
         cfg.task.env_runner,
         output_dir=out_parent,
-        eval_episodes=args.n_infer_episodes,
-    )
-    metrics = runner.run_eval_metrics(
-        policy,
-        warmup_predict_steps=args.warmup_steps,
-        eval_seed=args.seed,
-        log_video=False,
+        eval_episodes=n_max,
     )
 
-    serializable = {k: v for k, v in metrics.items() if k != "sim_video_eval"}
+    m_te = runner.run_eval_metrics(
+        policy,
+        warmup_predict_steps=args.warmup_steps,
+        eval_seed=int(args.seed),
+        log_video=False,
+        n_episodes=int(args.n_infer_episodes),
+    )
+
+    if int(args.n_train_val_episodes) > 0:
+        m_tv = runner.run_eval_metrics(
+            policy,
+            warmup_predict_steps=args.warmup_steps,
+            eval_seed=int(args.seed + args.train_val_eval_seed_offset),
+            log_video=False,
+            n_episodes=int(args.n_train_val_episodes),
+        )
+        serializable = _merge_phases(m_tv, m_te)
+    else:
+        serializable = {**_prefix_metrics("test", m_te), **_legacy_from_test(m_te)}
     path = pathlib.Path(args.metrics_json).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
