@@ -4,7 +4,9 @@ Compatible with depth+RGB pipeline used by FlowPolicy (Open3D + same extrinsic f
 """
 from __future__ import annotations
 
+import json
 import math
+import time
 from typing import List
 
 import mujoco
@@ -43,11 +45,65 @@ class NativeMuJoCoPointCloudGenerator:
             self.cam_mats.append(cam_mat)
 
     def close(self):
+        # #region agent log
+        try:
+            p = {
+                "sessionId": "675d16",
+                "location": "mujoco_native_point_cloud.py:close_enter",
+                "message": "NativeMuJoCoPointCloudGenerator.close enter",
+                "data": {"n_renderers": len(self._renderers)},
+                "timestamp": int(time.time() * 1000),
+                "hypothesisId": "H1,H3",
+            }
+            with open(
+                "/home/daffa/Documents/kripsy12/.cursor/debug-675d16.log", "a"
+            ) as _df:
+                _df.write(json.dumps(p) + "\n")
+        except Exception:
+            pass
+        # #endregion
         for r in self._renderers:
             r.close()
         self._renderers.clear()
+        # #region agent log
+        try:
+            p = {
+                "sessionId": "675d16",
+                "location": "mujoco_native_point_cloud.py:close_exit",
+                "message": "NativeMuJoCoPointCloudGenerator.close done",
+                "data": {},
+                "timestamp": int(time.time() * 1000),
+                "hypothesisId": "H3",
+            }
+            with open(
+                "/home/daffa/Documents/kripsy12/.cursor/debug-675d16.log", "a"
+            ) as _df:
+                _df.write(json.dumps(p) + "\n")
+        except Exception:
+            pass
+        # #endregion
 
     def __del__(self):
+        # #region agent log
+        try:
+            rs = getattr(self, "_renderers", None)
+            p = {
+                "sessionId": "675d16",
+                "location": "mujoco_native_point_cloud.py:__del__",
+                "message": "NativeMuJoCoPointCloudGenerator.__del__",
+                "data": {
+                    "n_renderers": len(rs) if rs is not None else -1,
+                },
+                "timestamp": int(time.time() * 1000),
+                "hypothesisId": "H1,H2,H3",
+            }
+            with open(
+                "/home/daffa/Documents/kripsy12/.cursor/debug-675d16.log", "a"
+            ) as _df:
+                _df.write(json.dumps(p) + "\n")
+        except Exception:
+            pass
+        # #endregion
         try:
             self.close()
         except Exception:

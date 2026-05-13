@@ -140,6 +140,23 @@ class FrankaKitchenPointCloudEnv(gym.Env):
         self._prev_dist_current_stage = np.inf
 
     def close(self):
+        # #region agent log
+        try:
+            p = {
+                "sessionId": "675d16",
+                "location": "franka_kitchen_env.py:close_enter",
+                "message": "FrankaKitchenPointCloudEnv.close enter",
+                "data": {},
+                "timestamp": int(time.time() * 1000),
+                "hypothesisId": "H1,H5",
+            }
+            with open(
+                "/home/daffa/Documents/kripsy12/.cursor/debug-675d16.log", "a"
+            ) as f:
+                f.write(json.dumps(p) + "\n")
+        except Exception:
+            pass
+        # #endregion
         self._pc_gen.close()
         self._gymnasium_env.close()
         super().close()

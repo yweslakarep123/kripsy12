@@ -1,0 +1,4 @@
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:__del__", "message": "NativeMuJoCoPointCloudGenerator.__del__", "data": {"n_renderers": 2}, "timestamp": 1778681200717, "hypothesisId": "H1,H2,H3"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_enter", "message": "NativeMuJoCoPointCloudGenerator.close enter", "data": {"n_renderers": 2}, "timestamp": 1778681200717, "hypothesisId": "H1,H3"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:__del__", "message": "NativeMuJoCoPointCloudGenerator.__del__", "data": {"n_renderers": 2}, "timestamp": 1778681211854, "hypothesisId": "H1,H2,H3"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_enter", "message": "NativeMuJoCoPointCloudGenerator.close enter", "data": {"n_renderers": 2}, "timestamp": 1778681211854, "hypothesisId": "H1,H3"}

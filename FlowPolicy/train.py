@@ -502,6 +502,9 @@ class TrainFlowPolicyWorkspace:
             self.epoch += 1
             del step_log
 
+        if env_runner is not None:
+            env_runner.close()
+
         try:
             wandb_run.finish()
         except Exception:
@@ -540,7 +543,8 @@ class TrainFlowPolicyWorkspace:
         policy.cuda()
 
         runner_log = env_runner.run(policy)
-        
+        env_runner.close()
+
       
         cprint(f"---------------- Eval Results --------------", 'magenta')
         for key, value in runner_log.items():

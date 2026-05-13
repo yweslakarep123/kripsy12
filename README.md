@@ -6,9 +6,11 @@ Struktur repositori:
 
 ```text
 <akar-repo>/                # root Git (folder berisi scripts + FlowPolicy)
-├── scripts/                # orkestrator eksperimen (baseline + random search)
+├── scripts/                # orkestrator eksperimen (baseline + pencarian hiperparameter)
 │   ├── run_experiment.py
-│   ├── run_experiment.sh   # pintasan CLI dengan default 66 run
+│   ├── run_experiment.sh   # pintasan CLI: baseline lalu Bayesian (default) atau random
+│   ├── run_baseline_only.sh              # hanya baseline (6 run default)
+│   ├── run_bayesian_search_only.sh       # hanya optimasi Bayesian (tanpa baseline)
 │   ├── run_experiment_random_search.sh   # hanya random search (tanpa baseline)
 │   ├── cv_splits.py
 │   ├── summarize.py
@@ -98,18 +100,18 @@ Override umum lain:
 
 Checkpoint dan log Hydra biasanya di bawah `FlowPolicy/data/outputs/` (atau sesuai `hydra.run.dir`).
 
-## Pipeline eksperimen (baseline + random search, tanpa k-fold)
+## Pipeline eksperimen (baseline + pencarian hiperparameter, tanpa k-fold)
 
 Pelatihan **tidak** memakai validasi silang berlipat (k-fold). Episode dibagi **sekali** menjadi train / validation / test (`scripts/cv_splits.py`): satu partisi tetap, dapat direproduksi dengan `--cv-seed`.
 
-Skrip **`scripts/run_experiment.py`** menjalankan dua fase **berurutan**:
+Skrip **`scripts/run_experiment.py`** menjalankan dua fase **berurutan** (fase 2 default: **optimasi Bayesian** / GP + EI; bisa diganti ke random search):
 
 | Fase | Isi | Jumlah run (default) |
 |------|-----|------------------------|
 | **1. Baseline** | Hyperparameter default FlowPolicy (`experiment_constants.DEFAULT_BASELINE_HPARAMS`) × **3 seed** × **2 profil preprocessing** | **6** |
-| **2. Random search** | Konfigurasi yang disampling sekali (`configs.json`, kolom `sampled`) × **3 seed** × **2 profil** | **60** (`--n-configs 10` → 10 × 3 × 2) |
+| **2. Pencarian** | **`--hyperparam-search bayesian`** (default): trial BO berurutan, atau **`random`**: grid disampling sekaligus (`configs.json`, kolom `sampled`) × **3 seed** × **2 profil** | **60** dengan `--n-configs 10` (10 × 3 × 2) |
 
-**Total default: 66 run** (6 baseline + 60 random search).
+**Total default dengan Bayesian:** 6 baseline + 60 trial BO ≈ **66 run** (sama hitungan grid; mekanisme sampling berbeda untuk fase 2).
 
 Profil preprocessing (proxy “dengan / tanpa” augmentasi observasi): **`standard`** (noise observasi) dan **`minimal`** (tanpa noise tersebut). Tiap run punya folder sendiri di `runs/`.
 
@@ -174,7 +176,67 @@ python scripts/run_experiment.py \
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
-Flag **`--baseline-only`** dan **`--random-search-only`** saling meniadakan; jangan dipakai bersamaan.
+Flag **`--baseline-only`**, **`--random-search-only`**, dan **`--bayesian-search-only`** saling eksklusif (maksimal satu aktif).
+
+### Hanya optimasi Bayesian (tanpa baseline)
+
+Untuk **melewati baseline** dan hanya menjalankan fase **Bayesian optimization** (default `--hyperparam-search bayesian`), gunakan **`--bayesian-search-only`**.
+
+**Opsi A — skrip pintasan:**
+
+```bash
+./scripts/run_bayesian_search_only.sh \
+  --output-dir outputs/bayesian_only \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
+```
+
+**Opsi B — Python langsung** (sesuaikan jumlah trial, seed, dan objektif BO):
+
+```bash
+python scripts/run_experiment.py \
+  --bayesian-search-only \
+  --hyperparam-search bayesian \
+  --n-configs 10 \
+  --seeds 0 42 101 \
+  --profiles standard minimal \
+  --bo-objective neg_trade_off \
+  --output-dir outputs/bayesian_only \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
+```
+
+- **`--n-configs`**: jumlah **trial** Bayesian berurutan (bukan grid RS sekaligus). Total run ≈ **`n-configs × |seeds| × |profiles|`**.
+- **`--bo-objective`**: `neg_trade_off` (default) atau `neg_k4` — lihat bantuan `run_experiment.py`.
+- File **`configs.json`** di `--output-dir` menyimpan state BO (`version: 3`); untuk studi baru gunakan **`--output-dir` kosong** atau folder baru.
+
+### Training ulang: hanya baseline, folder baru (laptop, tanpa melanjutkan run lama)
+
+Orchestrator **melewati** job yang sudah selesai jika di `--output-dir` yang sama sudah ada **`results.csv`** / **`metrics.json`** per run. Agar dianggap **mulai dari nol**, pakai **folder keluaran yang baru** (path yang belum dipakai), misalnya:
+
+```bash
+mkdir -p outputs/baseline_laptop_fresh
+./scripts/run_baseline_only.sh \
+  --output-dir outputs/baseline_laptop_fresh \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
+  --max-batch-size 16 \
+  --dataloader-num-workers 0
+```
+
+Setara tanpa skrip shell:
+
+```bash
+mkdir -p outputs/baseline_laptop_fresh
+python scripts/run_experiment.py \
+  --baseline-only \
+  --seeds 0 42 101 \
+  --profiles standard minimal \
+  --output-dir outputs/baseline_laptop_fresh \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
+  --max-batch-size 16 \
+  --dataloader-num-workers 0
+```
+
+- Ganti nama **`outputs/baseline_laptop_fresh`** sesuai keinginan Anda (tanggal / mesin).
+- Jika Anda **sengaja** memakai ulang folder lama tetapi ingin train ulang semua, hapus dulu isinya (**`runs/`**, **`results.csv`**, **`configs.json`**, **`cv_splits.json`**) — hati-hati: data metrik lama hilang.
 
 ### Opsi untuk GPU 16 GB
 
@@ -238,7 +300,7 @@ Jika masih OOM setelah **`16`**, tidak ada pengaturan aman lain di orchestrator 
 |---------|---------|------------|
 | `--seeds` | `0 42 101` | Tiga seed untuk training / dataset / inferensi |
 | `--profiles` | `standard minimal` | Profil preprocessing dataset |
-| `--n-configs` | `10` | Jumlah sampel random search; total run RS = **n × jumlah seed × jumlah profil** (= 60 dengan default) |
+| `--n-configs` | `10` | Random: jumlah sampel sekaligus; Bayesian: jumlah **trial** BO berurutan. Total run fase 2 ≈ **n × jumlah seed × jumlah profil** |
 | `--sampling-seed` | `99` | Seed sampling random search (agar `configs.json` reproducible) |
 | `--cv-seed` | `12345` | Seed **satu** pembagian episode train/val/test (bukan k-fold) |
 | `--n-infer-episodes` | `50` | Episode evaluasi setelah training |
@@ -246,14 +308,17 @@ Jika masih OOM setelah **`16`**, tidak ada pengaturan aman lain di orchestrator 
 | `--max-batch-size` | `128` | Plafon batch train/val; turunkan untuk **GPU 16 GB** atau **laptop 8 GB** (lihat bagian di atas) |
 | `--dataloader-num-workers` | `4` | Workers DataLoader |
 | `--checkpoint-every` | `200` | Simpan checkpoint berkala (resume jika mesin mati) |
-| `--baseline-only` | (off) | Hanya baseline; random search tidak dijalankan |
+| `--baseline-only` | (off) | Hanya baseline; fase pencarian tidak dijalankan |
 | `--random-search-only` | (off) | Hanya random search; baseline tidak dijalankan |
+| `--bayesian-search-only` | (off) | Hanya optimasi Bayesian; baseline tidak dijalankan |
+| `--hyperparam-search` | `bayesian` | Setelah baseline: `bayesian` atau `random` (tidak relevan jika `--baseline-only`) |
+| `--bo-objective` | `neg_trade_off` | Objektif minimasi untuk BO: `neg_trade_off` atau `neg_k4` |
 
 ### Keluaran
 
 Di `--output-dir` (mis. `outputs/experiment/`):
 
-- `configs.json` — baseline + daftar konfigurasi random search (`version: 2`).
+- `configs.json` — baseline + daftar konfigurasi pencarian: **`version: 2`** (random search) atau **`version: 3`** (Bayesian / state trial BO).
 - `cv_splits.json` — **satu** partisi train/val (+ meta `split_mode`, bukan daftar lipatan k-fold penuh).
 - `results.csv` — satu baris per run (hyperparameter + metrik + `status`).
 - `runs/<nama_run>/` — output Hydra, `checkpoints/`, `metrics.json`, `training_final.json`.

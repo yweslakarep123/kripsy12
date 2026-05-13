@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import wandb
 import time
 import numpy as np
@@ -83,6 +84,31 @@ class KitchenRunner(BaseRunner):
 
         self.logger_util_test = logger_util.LargestKRecorder(K=3)
         self.logger_util_test10 = logger_util.LargestKRecorder(K=5)
+        self._env_closed = False
+
+    def close(self):
+        """Tutup sim + renderer MuJoCo (EGL) agar tidak bergantung pada __del__ saat shutdown."""
+        if self._env_closed:
+            return
+        self._env_closed = True
+        # #region agent log
+        try:
+            p = {
+                "sessionId": "675d16",
+                "location": "kitchen_runner.py:close",
+                "message": "KitchenRunner.close calling env.close()",
+                "data": {"runId": "post-fix"},
+                "timestamp": int(time.time() * 1000),
+                "hypothesisId": "H1",
+            }
+            with open(
+                "/home/daffa/Documents/kripsy12/.cursor/debug-675d16.log", "a"
+            ) as _df:
+                _df.write(json.dumps(p) + "\n")
+        except Exception:
+            pass
+        # #endregion
+        self.env.close()
 
     @staticmethod
     def _completion_set_from_info(info: dict) -> set:
@@ -221,6 +247,23 @@ class KitchenRunner(BaseRunner):
             f"lat_ms={mean_lat:.3f}±{std_lat:.3f}",
             "green",
         )
+        # #region agent log
+        try:
+            p = {
+                "sessionId": "675d16",
+                "location": "kitchen_runner.py:run_eval_metrics_return",
+                "message": "run_eval_metrics returning (no env.close in this method)",
+                "data": {},
+                "timestamp": int(time.time() * 1000),
+                "hypothesisId": "H1",
+            }
+            with open(
+                "/home/daffa/Documents/kripsy12/.cursor/debug-675d16.log", "a"
+            ) as _df:
+                _df.write(json.dumps(p) + "\n")
+        except Exception:
+            pass
+        # #endregion
         return out
 
     def run(self, policy: BasePolicy):

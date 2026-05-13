@@ -6,5 +6,9 @@ class BaseRunner:
     def __init__(self, output_dir):
         self.output_dir = output_dir
 
+    def close(self):
+        """Subkelas yang memegang sim / renderer harus override (mis. KitchenRunner)."""
+        pass
+
     def run(self, policy: BasePolicy) -> Dict:
         raise NotImplementedError()

@@ -12,11 +12,13 @@ Contoh:
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
 import pathlib
 import random
 import sys
+import time
 
 import numpy as np
 import torch
@@ -61,6 +63,26 @@ def _merge_phases(train_val: dict, test: dict) -> dict:
 
 
 def main():
+    # #region agent log
+    def _dbg_atexit():
+        try:
+            p = {
+                "sessionId": "675d16",
+                "location": "infer_kitchen.py:atexit",
+                "message": "process atexit (before full interpreter teardown)",
+                "data": {},
+                "timestamp": int(time.time() * 1000),
+                "hypothesisId": "H2",
+            }
+            with open(
+                "/home/daffa/Documents/kripsy12/.cursor/debug-675d16.log", "a"
+            ) as f:
+                f.write(json.dumps(p) + "\n")
+        except Exception:
+            pass
+
+    atexit.register(_dbg_atexit)
+    # #endregion
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", type=str, required=True)
     p.add_argument("--metrics-json", type=str, required=True)
@@ -102,30 +124,53 @@ def main():
         output_dir=out_parent,
         eval_episodes=n_max,
     )
-
-    m_te = runner.run_eval_metrics(
-        policy,
-        warmup_predict_steps=args.warmup_steps,
-        eval_seed=int(args.seed),
-        log_video=False,
-        n_episodes=int(args.n_infer_episodes),
-    )
-
-    if int(args.n_train_val_episodes) > 0:
-        m_tv = runner.run_eval_metrics(
+    try:
+        m_te = runner.run_eval_metrics(
             policy,
             warmup_predict_steps=args.warmup_steps,
-            eval_seed=int(args.seed + args.train_val_eval_seed_offset),
+            eval_seed=int(args.seed),
             log_video=False,
-            n_episodes=int(args.n_train_val_episodes),
+            n_episodes=int(args.n_infer_episodes),
         )
-        serializable = _merge_phases(m_tv, m_te)
-    else:
-        serializable = {**_prefix_metrics("test", m_te), **_legacy_from_test(m_te)}
-    path = pathlib.Path(args.metrics_json).resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(serializable, f, indent=2)
+
+        if int(args.n_train_val_episodes) > 0:
+            m_tv = runner.run_eval_metrics(
+                policy,
+                warmup_predict_steps=args.warmup_steps,
+                eval_seed=int(args.seed + args.train_val_eval_seed_offset),
+                log_video=False,
+                n_episodes=int(args.n_train_val_episodes),
+            )
+            serializable = _merge_phases(m_tv, m_te)
+        else:
+            serializable = {**_prefix_metrics("test", m_te), **_legacy_from_test(m_te)}
+        path = pathlib.Path(args.metrics_json).resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(serializable, f, indent=2)
+
+        # #region agent log
+        try:
+            p = {
+                "sessionId": "675d16",
+                "location": "infer_kitchen.py:main_end",
+                "message": "infer_kitchen main finished writing metrics",
+                "data": {"runId": "post-fix"},
+                "timestamp": int(time.time() * 1000),
+                "hypothesisId": "H1",
+            }
+            with open(
+                "/home/daffa/Documents/kripsy12/.cursor/debug-675d16.log", "a"
+            ) as f:
+                f.write(json.dumps(p) + "\n")
+        except Exception:
+            pass
+        # #endregion
+    finally:
+        try:
+            runner.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
