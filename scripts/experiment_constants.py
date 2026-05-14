@@ -27,7 +27,7 @@ SEARCH_SPACE = {
     "optimizer.lr": [1e-3, 5e-4, 1e-4, 1e-5],
     "dataloader.batch_size": [64, 128, 256, 512],
     "policy.Conditional_ConsistencyFM.num_segments": [1, 2, 3, 4],
-    "policy.Conditional_ConsistencyFM.eps": [1e-4, 1e-3, 1e-2, 1.0],
+    "policy.Conditional_ConsistencyFM.eps": [1e-4, 1e-3, 1e-2, 0.5],
     "policy.Conditional_ConsistencyFM.delta": [1e-4, 1e-3, 1e-2, 1.0],
     "n_action_steps": [2, 4, 6, 8],
     "n_obs_steps": [4, 6, 8, 16],

@@ -210,7 +210,9 @@ class FlowPolicy(BasePolicy):
 
         # Uniform
         dt = 1./self.num_inference_step
-        eps = self.eps
+        eps = float(self.eps)
+        # num_t = i/N*(1-eps)+eps must stay < 1 so (1-num_t)^2 in the SDE update stays > 0
+        eps = min(max(eps, 1e-8), 1.0 - 1e-6)
 
         for i in range(sde.sample_N):
             num_t = i /sde.sample_N * (1 - eps) + eps
@@ -218,6 +220,44 @@ class FlowPolicy(BasePolicy):
             pred = self.model(z, t*99, local_cond=local_cond, global_cond=global_cond) ### Copy from models/utils.py 
             # convert to diffusion models if sampling.sigma_variance > 0.0 while perserving the marginal probability 
             sigma_t = sde.sigma_t(num_t)
+            # #region agent log
+            try:
+                import json as _json
+                import time as _time
+                from pathlib import Path as _Path
+
+                _log_path = (
+                    _Path(__file__).resolve().parents[3] / ".cursor" / "debug-db6e34.log"
+                )
+                _log_path.parent.mkdir(parents=True, exist_ok=True)
+
+                _den = float(2 * (float(sde.noise_scale) ** 2) * ((1.0 - float(num_t)) ** 2))
+                if i < 5 or i >= int(sde.sample_N) - 1 or _den < 1e-18:
+                    with open(_log_path, "a", encoding="utf-8") as _lf:
+                        _lf.write(
+                            _json.dumps(
+                                {
+                                    "sessionId": "db6e34",
+                                    "hypothesisId": "A",
+                                    "location": "flowpolicy.py:predict_action",
+                                    "message": "inference_step",
+                                    "data": {
+                                        "i": i,
+                                        "sample_N": int(sde.sample_N),
+                                        "eps": float(eps),
+                                        "num_t": float(num_t),
+                                        "denom": _den,
+                                        "noise_scale": float(sde.noise_scale),
+                                    },
+                                    "timestamp": int(_time.time() * 1000),
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
+            except Exception:
+                pass
+            # #endregion
             pred_sigma = pred + (sigma_t**2)/(2*(sde.noise_scale**2)*((1.-num_t)**2)) * (0.5 * num_t * (1.-num_t) * pred - 0.5 * (2.-num_t)*z.detach().clone())
             z = z.detach().clone() + pred_sigma * dt + sigma_t * np.sqrt(dt) * torch.randn_like(pred_sigma).to(device)
         z[cond_mask] = cond_data[cond_mask] # a1
