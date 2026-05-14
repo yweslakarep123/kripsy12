@@ -12,6 +12,7 @@ Struktur repositori:
 │   ├── run_baseline_only.sh              # hanya baseline (6 run default)
 │   ├── run_bayesian_search_only.sh       # hanya optimasi Bayesian (tanpa baseline)
 │   ├── run_experiment_random_search.sh   # hanya random search (tanpa baseline)
+│   ├── run_reinflow_rl_only.sh             # hanya fine-tuning RL ReinFlow-style (butuh BC)
 │   ├── cv_splits.py
 │   ├── summarize.py
 │   ├── plot_results.py
@@ -104,14 +105,17 @@ Checkpoint dan log Hydra biasanya di bawah `FlowPolicy/data/outputs/` (atau sesu
 
 Pelatihan **tidak** memakai validasi silang berlipat (k-fold). Episode dibagi **sekali** menjadi train / validation / test (`scripts/cv_splits.py`): satu partisi tetap, dapat direproduksi dengan `--cv-seed`.
 
-Skrip **`scripts/run_experiment.py`** menjalankan dua fase **berurutan** (fase 2 default: **optimasi Bayesian** / GP + EI; bisa diganti ke random search):
+Skrip **`scripts/run_experiment.py`** menjalankan dua fase **berurutan** (fase 2 default: **optimasi Bayesian** / GP + EI; bisa diganti ke **random search** atau **fine-tuning RL online** bergaya ReinFlow):
 
 | Fase | Isi | Jumlah run (default) |
 |------|-----|------------------------|
 | **1. Baseline** | Hyperparameter default FlowPolicy (`experiment_constants.DEFAULT_BASELINE_HPARAMS`) × **3 seed** × **2 profil preprocessing** | **6** |
 | **2. Pencarian** | **`--hyperparam-search bayesian`** (default): trial BO berurutan, atau **`random`**: grid disampling sekaligus (`configs.json`, kolom `sampled`) × **3 seed** × **2 profil** | **60** dengan `--n-configs 10` (10 × 3 × 2) |
+| **2. (alternatif)** | **`--hyperparam-search reinflow`**: fine-tuning RL online (PPO + injeksi noise pada ruang aksi; `FlowPolicy/train_reinflow_rl.py`) × **3 seed** × **2 profil** | **6** job RL (satu per kombinasi seed × profil, setelah baseline) |
 
 **Total default dengan Bayesian:** 6 baseline + 60 trial BO ≈ **66 run** (sama hitungan grid; mekanisme sampling berbeda untuk fase 2).
+
+**Total dengan ReinFlow-style RL:** 6 baseline + 6 fine-tuning RL ≈ **12 run** (fase 2 tidak memakai `--n-configs`).
 
 Profil preprocessing (proxy “dengan / tanpa” augmentasi observasi): **`standard`** (noise observasi) dan **`minimal`** (tanpa noise tersebut). Tiap run punya folder sendiri di `runs/`.
 
@@ -136,6 +140,24 @@ python scripts/run_experiment.py \
 ```
 
 Argumen `--zarr-path` **relatif terhadap folder berisi `train.py`** (lihat `KitchenDataset._resolve_zarr_path`). Untuk dataset di `FlowPolicy/FlowPolicy/data/`, gunakan nilai `FlowPolicy/data/kitchen_complete_from_minari.zarr` atau path absolut.
+
+### Baseline + fine-tuning RL online (ReinFlow-style)
+
+Fase kedua memakai **`--hyperparam-search reinflow`**: setelah BC (baseline), policy flow di-fine-tune dengan **RL online** (PPO; mean aksi = flow deterministik, stokastisitas = Gaussian terlatih pada fitur encoder — lihat `FlowPolicy/train_reinflow_rl.py`). Checkpoint BC diambil dari `runs/baseline_seed<seed>_<profile>/checkpoints/latest.ckpt` di bawah `--output-dir` yang sama.
+
+Contoh dari **akar repositori**:
+
+```bash
+python3 scripts/run_experiment.py --output-dir outputs/exp_rl --hyperparam-search reinflow
+```
+
+Hanya fase RL (baseline harus sudah selesai di folder keluaran yang sama):
+
+```bash
+./scripts/run_reinflow_rl_only.sh --output-dir outputs/exp_rl
+```
+
+Opsi tambahan (misalnya `--zarr-path`, `--results-csv`, **`--reinflow-total-updates`**) sama seperti pemanggilan `run_experiment.py` pada umumnya.
 
 ### Hanya random search (tanpa baseline)
 
@@ -329,7 +351,7 @@ Jika masih OOM setelah **`16`**, tidak ada pengaturan aman lain di orchestrator 
 |---------|---------|------------|
 | `--seeds` | `0 42 101` | Tiga seed untuk training / dataset / inferensi |
 | `--profiles` | `standard minimal` | Profil preprocessing dataset |
-| `--n-configs` | `10` | Random: jumlah sampel sekaligus; Bayesian: jumlah **trial** BO berurutan. Total run fase 2 ≈ **n × jumlah seed × jumlah profil** |
+| `--n-configs` | `10` | Random: jumlah sampel sekaligus; Bayesian: jumlah **trial** BO berurutan. Total run fase 2 ≈ **n × jumlah seed × jumlah profil**. (Tidak memengaruhi fase **`reinflow`**, yang memakai satu job RL per pasangan seed × profil.) |
 | `--sampling-seed` | `99` | Seed sampling random search (agar `configs.json` reproducible) |
 | `--cv-seed` | `12345` | Seed **satu** pembagian episode train/val/test (bukan k-fold) |
 | `--n-infer-episodes` | `50` | Episode evaluasi setelah training |
@@ -341,14 +363,16 @@ Jika masih OOM setelah **`16`**, tidak ada pengaturan aman lain di orchestrator 
 | `--baseline-only` | (off) | Hanya baseline; fase pencarian tidak dijalankan |
 | `--random-search-only` | (off) | Hanya random search; baseline tidak dijalankan |
 | `--bayesian-search-only` | (off) | Hanya optimasi Bayesian; baseline tidak dijalankan |
-| `--hyperparam-search` | `bayesian` | Setelah baseline: `bayesian` atau `random` (tidak relevan jika `--baseline-only`) |
+| `--reinflow-rl-only` | (off) | Hanya fine-tuning RL ReinFlow-style; butuh checkpoint BC di `runs/baseline_seed*` |
+| `--hyperparam-search` | `bayesian` | Setelah baseline: `bayesian`, `random`, atau `reinflow` (tidak relevan jika `--baseline-only`) |
+| `--reinflow-total-updates` | `50` | Jumlah siklus rollout+PPO per job ReinFlow RL |
 | `--bo-objective` | `neg_trade_off` | Objektif minimasi untuk BO: `neg_trade_off` atau `neg_k4` |
 
 ### Keluaran
 
 Di `--output-dir` (mis. `outputs/experiment/`):
 
-- `configs.json` — baseline + daftar konfigurasi pencarian: **`version: 2`** (random search) atau **`version: 3`** (Bayesian / state trial BO).
+- `configs.json` — baseline + daftar konfigurasi pencarian: **`version: 2`** (random search), **`version: 3`** (Bayesian / state trial BO), atau **`version: 4`** (ReinFlow RL; tanpa grid `sampled`).
 - `cv_splits.json` — **satu** partisi train/val (+ meta `split_mode`, bukan daftar lipatan k-fold penuh).
 - `results.csv` — default di folder `--output-dir`, kecuali Anda set **`--results-csv`**. Satu baris per run (hyperparameter + metrik + `status`); baseline dan Bayesian memakainya untuk **melewati** job yang sudah `status=ok`. Random search: lewati dari CSV **hanya** jika **`--results-csv`** diisi; tanpa itu CSV hanya ditambahkan saat run berjalan (bukan sumber utama lewati).
 - `runs/<nama_run>/` — output Hydra, `checkpoints/`, `metrics.json`, `training_final.json`.
@@ -358,6 +382,7 @@ Nama folder run:
 
 - Baseline: `baseline_seed<seed>_<profile>`
 - Random search: `cfg<idx>_seed<seed>_<profile>`
+- ReinFlow RL: `reinflow_rl_seed<seed>_<profile>`
 
 ### Resume setelah mesin mati
 
