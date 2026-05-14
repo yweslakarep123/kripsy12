@@ -163,7 +163,9 @@ SAMPLING_SEED=99 ./scripts/run_experiment_random_search.sh \
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
-**Opsi B — Python langsung** (parameter seed / sampling bisa Anda ubah):
+**Opsi B — Python langsung** (parameter seed / sampling bisa Anda ubah). **Jalankan dari akar repositori** (folder yang berisi `scripts/`).
+
+**Tanpa `--results-csv`** — random search **tidak** melewati job dari isi CSV; resume mengandalkan `metrics.json` / checkpoint:
 
 ```bash
 python scripts/run_experiment.py \
@@ -176,7 +178,34 @@ python scripts/run_experiment.py \
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
+**Dengan `--results-csv`** — job yang sudah **`status=ok`** di file itu **tidak** di-train / di-infer ulang (ganti path jika perlu):
+
+```bash
+python scripts/run_experiment.py \
+  --random-search-only \
+  --seeds 0 42 1010 0 \
+  --profiles standard minimal \
+  --n-configs 10 \
+  --sampling-seed 99 \
+  --output-dir outputs/experiment_rs \
+  --results-csv outputs/experiment_rs/results.csv \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
+```
+
+**Opsi A + `--results-csv`** (argumen diteruskan ke `run_experiment.py`):
+
+```bash
+./scripts/run_experiment_random_search.sh \
+  --output-dir outputs/experiment_rs \
+  --results-csv outputs/experiment_rs/results.csv \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
+```
+
+Penjelasan **`--results-csv`**: jika **tidak** diberikan, random search **tidak** melewati job hanya karena baris lama di `results.csv` (tetap memakai `metrics.json` / checkpoint untuk resume). Jika **diberikan** (relatif ke akar repo atau path absolut), semua baris metrik ditulis ke file itu dan kombinasi `(cfg_idx, seed, profile, fold)` yang sudah **`status=ok`** di file tersebut **tidak** di-train / di-infer ulang — cocok untuk melanjutkan grid tanpa menduplikasi konfigurasi yang sama. Path boleh sama dengan default (`<output-dir>/results.csv`); yang penting opsi ini **diisi eksplisit** agar perilaku lewati dari CSV aktif.
+
 Flag **`--baseline-only`**, **`--random-search-only`**, dan **`--bayesian-search-only`** saling eksklusif (maksimal satu aktif).
+
+**Catatan:** opsi **`--results-csv`** juga mengubah lokasi **`results.csv`** untuk **baseline** dan **Bayesian** (satu file untuk seluruh orkestrator). `summarize.py` / `plot_results.py` mendukung **`--results-csv`** yang sama jika Anda menjalankan agregasi manual.
 
 ### Hanya optimasi Bayesian (tanpa baseline)
 
@@ -210,7 +239,7 @@ python scripts/run_experiment.py \
 
 ### Training ulang: hanya baseline, folder baru (laptop, tanpa melanjutkan run lama)
 
-Orchestrator **melewati** job yang sudah selesai jika di `--output-dir` yang sama sudah ada **`results.csv`** / **`metrics.json`** per run. Agar dianggap **mulai dari nol**, pakai **folder keluaran yang baru** (path yang belum dipakai), misalnya:
+Orchestrator **melewati** job yang sudah selesai jika di `--output-dir` yang sama, per kombinasi run, sudah ada **`metrics.json`** di folder run tersebut. Untuk **baseline** dan **Bayesian**, lewati juga berlaku jika **`results.csv`** (lihat **`--results-csv`** di bawah) memuat baris dengan kombinasi yang sama dan **`status=ok`**. Untuk **random search** **tanpa** **`--results-csv`**, baris CSV **tidak** dipakai untuk keputusan lewati (hanya **`metrics.json`** dan artefak resume); **dengan** **`--results-csv`**, file yang ditunjuk dipakai seperti baseline/BO (lewati jika `status=ok`). Agar dianggap **mulai dari nol**, pakai **folder keluaran yang baru** (path yang belum dipakai), misalnya:
 
 ```bash
 mkdir -p outputs/baseline_laptop_fresh
@@ -236,7 +265,7 @@ python scripts/run_experiment.py \
 ```
 
 - Ganti nama **`outputs/baseline_laptop_fresh`** sesuai keinginan Anda (tanggal / mesin).
-- Jika Anda **sengaja** memakai ulang folder lama tetapi ingin train ulang semua, hapus dulu isinya (**`runs/`**, **`results.csv`**, **`configs.json`**, **`cv_splits.json`**) — hati-hati: data metrik lama hilang.
+- Jika Anda **sengaja** memakai ulang folder lama tetapi ingin train ulang semua, hapus dulu isinya (**`runs/`**, **`results.csv`** atau file yang Anda set di **`--results-csv`**, **`configs.json`**, **`cv_splits.json`**) — hati-hati: data metrik lama hilang. Tanpa **`--results-csv`**, untuk **random search** saja, menghapus **`results.csv`** default saja **tidak** memaksa ulang semua job: selama **`metrics.json`** masih ada di suatu folder run, job itu tetap dilewati; hapus juga folder run yang bersangkutan di **`runs/`** jika ingin train ulang dari awal.
 
 ### Opsi untuk GPU 16 GB
 
@@ -305,6 +334,7 @@ Jika masih OOM setelah **`16`**, tidak ada pengaturan aman lain di orchestrator 
 | `--cv-seed` | `12345` | Seed **satu** pembagian episode train/val/test (bukan k-fold) |
 | `--n-infer-episodes` | `50` | Episode evaluasi setelah training |
 | `--output-dir` | `outputs/experiment` | Relatif terhadap akar repo |
+| `--results-csv` | (off) | Jalur `results.csv` (relatif repo atau absolut). Default bila tidak diisi: `<output-dir>/results.csv`. **Random search:** jika diisi, job dengan `status=ok` di file ini dilewati; baseline/BO selalu memakai file ini untuk lewati + append |
 | `--max-batch-size` | `128` | Plafon batch train/val; turunkan untuk **GPU 16 GB** atau **laptop 8 GB** (lihat bagian di atas) |
 | `--dataloader-num-workers` | `4` | Workers DataLoader |
 | `--checkpoint-every` | `200` | Simpan checkpoint berkala (resume jika mesin mati) |
@@ -320,7 +350,7 @@ Di `--output-dir` (mis. `outputs/experiment/`):
 
 - `configs.json` — baseline + daftar konfigurasi pencarian: **`version: 2`** (random search) atau **`version: 3`** (Bayesian / state trial BO).
 - `cv_splits.json` — **satu** partisi train/val (+ meta `split_mode`, bukan daftar lipatan k-fold penuh).
-- `results.csv` — satu baris per run (hyperparameter + metrik + `status`).
+- `results.csv` — default di folder `--output-dir`, kecuali Anda set **`--results-csv`**. Satu baris per run (hyperparameter + metrik + `status`); baseline dan Bayesian memakainya untuk **melewati** job yang sudah `status=ok`. Random search: lewati dari CSV **hanya** jika **`--results-csv`** diisi; tanpa itu CSV hanya ditambahkan saat run berjalan (bukan sumber utama lewati).
 - `runs/<nama_run>/` — output Hydra, `checkpoints/`, `metrics.json`, `training_final.json`.
 - `summary.csv`, `plots/*.png` dan `*.pdf` — dibuat otomatis di akhir (`summarize.py`, `plot_results.py`).
 
@@ -331,7 +361,10 @@ Nama folder run:
 
 ### Resume setelah mesin mati
 
-Run **dilewati** jika sudah selesai: ada **`metrics.json`** di folder run, atau **`results.csv`** sudah punya baris dengan kombinasi yang sama dan **`status=ok`**.
+Run **dilewati** jika inferensi sudah selesai: ada **`metrics.json`** di folder run tersebut.
+
+- **Baseline** dan **optimasi Bayesian**: run juga dilewati jika file **`results.csv`** yang dipakai (default `<output-dir>/results.csv` atau **`--results-csv`**) sudah memuat baris dengan kombinasi `(cfg_idx, seed, profile, fold)` yang sama dan **`status=ok`** (meskipun `metrics.json` belum ada — misalnya setelah sinkronisasi manual).
+- **Random search** (`--random-search-only` atau fase 2 dengan `--hyperparam-search random`): tanpa **`--results-csv`**, **`results.csv`** default **tidak** dipakai untuk memutuskan lewati; andalkan **`metrics.json`** dan folder **`runs/<nama_run>/`**. **Dengan** **`--results-csv PATH`**, perilaku lewati dari baris `status=ok` sama seperti baseline/BO untuk file **`PATH`**.
 
 - Training terputus (ada **`latest.ckpt`**, belum ada **`training_final.json`**) → training **dilanjutkan** (`training.resume=true`).
 - Training selesai (**`training_final.json`** + ckpt) tetapi inferensi belum → hanya **`infer_kitchen.py`** yang dijalankan.
@@ -358,7 +391,14 @@ python scripts/summarize.py --output-dir outputs/experiment
 python scripts/plot_results.py --output-dir outputs/experiment
 ```
 
-(`--output-dir` relatif terhadap akar repo.)
+Jika **`--results-csv`** menunjuk ke file **di luar** `<output-dir>/results.csv`, sertakan opsi yang sama:
+
+```bash
+python scripts/summarize.py --output-dir outputs/experiment --results-csv path/ke/results.csv
+python scripts/plot_results.py --output-dir outputs/experiment --results-csv path/ke/results.csv
+```
+
+(`--output-dir` dan path relatif **`--results-csv`** diukur dari akar repo; path absolut juga boleh.)
 
 ## Menjalankan di [Vast.ai](https://vast.ai/)
 

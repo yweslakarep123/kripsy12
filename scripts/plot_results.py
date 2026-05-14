@@ -189,13 +189,24 @@ def plot_hparam_sensitivity(results_ok: pd.DataFrame, out_dir: Path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--output-dir", type=str, default="outputs/experiment")
+    ap.add_argument(
+        "--results-csv",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Jalur results.csv (default: <output-dir>/results.csv). Relatif ke akar repo atau absolut.",
+    )
     args = ap.parse_args()
     repo_root = Path(__file__).resolve().parent.parent
     out_root = (repo_root / args.output_dir).resolve()
     plots = out_root / "plots"
     plots.mkdir(parents=True, exist_ok=True)
 
-    res_path = out_root / "results.csv"
+    if args.results_csv:
+        p = Path(args.results_csv)
+        res_path = p.resolve() if p.is_absolute() else (repo_root / p).resolve()
+    else:
+        res_path = out_root / "results.csv"
     sum_path = out_root / "summary.csv"
     if not res_path.is_file():
         print(f"Tidak ada {res_path}")

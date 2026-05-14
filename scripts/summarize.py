@@ -10,8 +10,8 @@ import numpy as np
 import pandas as pd
 
 
-def summarize(output_dir: Path) -> None:
-    results_path = output_dir / "results.csv"
+def summarize(output_dir: Path, *, results_csv: Path | None = None) -> None:
+    results_path = results_csv if results_csv is not None else (output_dir / "results.csv")
     if not results_path.is_file():
         print(f"Tidak ada {results_path}")
         return
@@ -70,9 +70,21 @@ def summarize(output_dir: Path) -> None:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--output-dir", type=str, default="outputs/experiment")
+    ap.add_argument(
+        "--results-csv",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Jalur results.csv (default: <output-dir>/results.csv). Relatif ke akar repo atau absolut.",
+    )
     repo_root = Path(__file__).resolve().parent.parent
     args = ap.parse_args()
-    summarize((repo_root / args.output_dir).resolve())
+    out_dir = (repo_root / args.output_dir).resolve()
+    res: Path | None = None
+    if args.results_csv:
+        p = Path(args.results_csv)
+        res = p.resolve() if p.is_absolute() else (repo_root / p).resolve()
+    summarize(out_dir, results_csv=res)
 
 
 if __name__ == "__main__":

@@ -13,8 +13,12 @@ dari ``training_sim_metrics.json``; success total & k1–k4; latensi global + ra
 ``trade_off`` dan ``trade_off_episode_latency``. Video: MP4 inferensi per-episod di ``inference_videos/``,
 bukan video rollout training di W&B.
 
-Resume: metrik lengkap (metrics.json atau baris results.csv status=ok) dilewati;
-training terputus dilanjutkan (resume Hydra) jika ada latest.ckpt tanpa training_final.json;
+Resume: metrik lengkap (metrics.json) dilewati; baseline dan Bayesian melewati job jika
+baris results.csv yang sama sudah status=ok. Random search secara default tidak
+memakai results.csv untuk lewati; jika ``--results-csv`` diisi, file itu dipakai
+(termasuk lewati random search bila status=ok). Tanpa ``--results-csv``, file CSV
+adalah ``<output-dir>/results.csv``.
+Training terputus dilanjutkan (resume Hydra) jika ada latest.ckpt tanpa training_final.json;
 infer saja jika training sudah selesai (training_final.json + ckpt) tanpa metrics.json.
 """
 
@@ -392,6 +396,7 @@ def execute_one_job(
     n_train_val_episodes: int,
     train_val_eval_seed_offset: int,
     skip_inference_videos: bool = False,
+    resume_from_results_csv: bool = True,
 ) -> None:
     run_dir = runs_root / run_name
     metrics_path = run_dir / "metrics.json"
@@ -415,7 +420,7 @@ def execute_one_job(
         )
         return
 
-    if row_key_ok_exists(results_csv, rk):
+    if resume_from_results_csv and row_key_ok_exists(results_csv, rk):
         print(f"[skip] {run_name}: sudah tercatat status=ok di results.csv")
         return
 
@@ -654,6 +659,16 @@ def main():
     ap.add_argument("--n-infer-episodes", type=int, default=50)
     ap.add_argument("--output-dir", type=str, default="outputs/experiment")
     ap.add_argument(
+        "--results-csv",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Jalur results.csv (relatif ke akar repo atau absolut). "
+        "Default: <output-dir>/results.csv. Jika diisi: semua fase menulis ke file ini "
+        "dan random search melewati job yang sudah punya baris status=ok untuk "
+        "(cfg_idx, seed, profile, fold) yang sama.",
+    )
+    ap.add_argument(
         "--zarr-path",
         type=str,
         default="FlowPolicy/data/kitchen_complete_from_minari.zarr",
@@ -779,7 +794,15 @@ def main():
 
     configs_path = out_root / "configs.json"
     cv_path = out_root / "cv_splits.json"
-    results_csv = out_root / "results.csv"
+    if args.results_csv:
+        _rcp = pathlib.Path(args.results_csv)
+        results_csv = (
+            _rcp.resolve() if _rcp.is_absolute() else (REPO_ROOT / _rcp).resolve()
+        )
+        results_csv.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        results_csv = out_root / "results.csv"
+    random_search_resume_from_csv = bool(args.results_csv)
 
     baseline_cfg, sampled_cfgs = load_or_create_config_bundle(
         configs_path,
@@ -860,7 +883,11 @@ def main():
             f"num_workers={args.dataloader_num_workers}\n"
         )
 
-    def run_grid_for_configs(cfgs: List[Dict[str, Any]]) -> None:
+    def run_grid_for_configs(
+        cfgs: List[Dict[str, Any]],
+        *,
+        resume_from_results_csv: bool = True,
+    ) -> None:
         for cfg in cfgs:
             cfg_idx = int(cfg["cfg_idx"])
             for seed in args.seeds:
@@ -891,6 +918,7 @@ def main():
                         n_train_val_episodes=args.n_train_val_episodes,
                         train_val_eval_seed_offset=args.train_val_eval_seed_offset,
                         skip_inference_videos=args.skip_inference_videos,
+                        resume_from_results_csv=resume_from_results_csv,
                     )
 
     def run_bayesian_trials() -> None:
@@ -937,7 +965,10 @@ def main():
     if args.baseline_only:
         run_grid_for_configs([baseline_cfg])
     elif args.random_search_only:
-        run_grid_for_configs(sampled_cfgs)
+        run_grid_for_configs(
+            sampled_cfgs,
+            resume_from_results_csv=random_search_resume_from_csv,
+        )
     elif args.bayesian_search_only:
         run_bayesian_trials()
     else:
@@ -945,14 +976,24 @@ def main():
         if eff_search == "bayesian":
             run_bayesian_trials()
         else:
-            run_grid_for_configs(sampled_cfgs)
+            run_grid_for_configs(
+                sampled_cfgs,
+                resume_from_results_csv=random_search_resume_from_csv,
+            )
 
     summarize_script = SCRIPT_DIR / "summarize.py"
     plot_script = SCRIPT_DIR / "plot_results.py"
-    subprocess.run(
-        [py, str(summarize_script), "--output-dir", str(out_root)], check=False
+    _csv_args: List[str] = (
+        ["--results-csv", str(results_csv)] if args.results_csv else []
     )
-    subprocess.run([py, str(plot_script), "--output-dir", str(out_root)], check=False)
+    subprocess.run(
+        [py, str(summarize_script), "--output-dir", str(out_root)] + _csv_args,
+        check=False,
+    )
+    subprocess.run(
+        [py, str(plot_script), "--output-dir", str(out_root)] + _csv_args,
+        check=False,
+    )
 
 
 if __name__ == "__main__":
