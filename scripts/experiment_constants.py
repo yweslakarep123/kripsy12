@@ -21,6 +21,8 @@ DEFAULT_BASELINE_HPARAMS = {
 }
 
 BASELINE_CFG_IDX = -1
+# Fine-tuning RL online (ReinFlow-style); baris terpisah di results.csv dari baseline / BO / RS.
+REINFLOW_CFG_IDX = -2
 
 SEARCH_SPACE = {
     "training.num_epochs": [500, 1000, 3000, 5000],

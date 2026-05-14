@@ -3,10 +3,10 @@
 Orkestrator eksperimen (tanpa k-fold):
 
   1) Baseline — hyperparameter default × len(seeds) × len(profiles)
-  2) Pencarian hiperparameter — ``bayesian`` (default, GP + EI) atau ``random``
+  2) Pencarian — ``bayesian``, ``random``, atau ``reinflow`` (RL online FlowPolicy, bukan BO/RS).
 
 Flag **`--baseline-only`** hanya baseline; fase pencarian dilewati.
-**`--random-search-only`** / **`--bayesian-search-only`** hanya fase pencarian (baseline dilewati).
+**`--random-search-only`** / **`--bayesian-search-only`** / **`--reinflow-rl-only`** hanya fase tersebut (baseline dilewati, kecuali ``reinflow`` dipakai bersama baseline di pipeline penuh).
 
 Metrik inferensi: fase train/val (sim) + fase test; metrik simulasi akhir training (``training_sim_*``)
 dari ``training_sim_metrics.json``; success total & k1–k4; latensi global + rata-rata per-episod;
@@ -45,6 +45,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from cv_splits import build_single_train_val_split, save_splits  # noqa: E402
 from experiment_constants import (  # noqa: E402
     BASELINE_CFG_IDX,
+    REINFLOW_CFG_IDX,
     CSV_HPARAM_KEYS,
     RESULTS_CSV_METRIC_COLUMNS,
     SEARCH_SPACE,
@@ -84,10 +85,11 @@ def load_or_create_config_bundle(
 
     - ``search_mode == "random"``: ``sampled`` berisi ``n_configs`` sampel sekaligus (``version`` 2).
     - ``search_mode == "bayesian"``: ``sampled`` boleh kosong lalu diisi per trial (``version`` 3).
+    - ``search_mode == "reinflow"``: tidak memakai ``sampled``; fase RL online (``version`` 4).
     """
     baseline = apply_vram_limits(baseline_config_dict(), max_batch)
     sm = str(search_mode).lower()
-    if sm not in ("random", "bayesian"):
+    if sm not in ("random", "bayesian", "reinflow"):
         raise ValueError(f"search_mode tidak valid: {search_mode}")
 
     raw: Any = None
@@ -134,6 +136,17 @@ def load_or_create_config_bundle(
             json.dump(bundle, f, indent=2)
         return baseline, []
 
+    if sm == "reinflow":
+        bundle = {
+            "version": 4,
+            "search_mode": "reinflow",
+            "baseline": baseline,
+            "sampled": [],
+        }
+        with open(configs_path, "w") as f:
+            json.dump(bundle, f, indent=2)
+        return baseline, []
+
     rng = np.random.RandomState(sampling_seed)
     sampled = [apply_vram_limits(c, max_batch) for c in sample_configs(rng, n_configs)]
     bundle = {"version": 2, "search_mode": "random", "baseline": baseline, "sampled": sampled}
@@ -150,8 +163,9 @@ def write_config_bundle(
     search_mode: str,
 ) -> None:
     sm = str(search_mode).lower()
+    ver = 4 if sm == "reinflow" else (3 if sm == "bayesian" else 2)
     bundle: Dict[str, Any] = {
-        "version": 3 if sm == "bayesian" else 2,
+        "version": ver,
         "search_mode": sm,
         "baseline": baseline,
         "sampled": sampled,
@@ -371,6 +385,154 @@ def run_infer_subprocess(
         vdir = pathlib.Path(metrics_path).parent / "inference_videos"
         cmd.extend(["--inference-videos-dir", str(vdir.resolve())])
     return subprocess.run(cmd, cwd=cwd_train, env=env).returncode
+
+
+def execute_reinflow_job(
+    *,
+    seed: int,
+    profile: str,
+    fold_i: int,
+    runs_root: pathlib.Path,
+    results_csv: pathlib.Path,
+    hp_cols: List[str],
+    py: str,
+    reinflow_py: pathlib.Path,
+    cwd_train: str,
+    n_infer_episodes: int,
+    n_train_val_episodes: int,
+    train_val_eval_seed_offset: int,
+    skip_inference_videos: bool,
+    baseline_row_cfg: Dict[str, Any],
+    resume_from_results_csv: bool,
+    total_updates: int,
+) -> None:
+    """Fine-tuning RL online (ReinFlow-style) dari ``baseline_seed*/checkpoints/latest.ckpt``."""
+    run_name = f"reinflow_rl_seed{seed}_{profile}"
+    run_dir = runs_root / run_name
+    metrics_path = run_dir / "metrics.json"
+    rk = (REINFLOW_CFG_IDX, seed, profile, fold_i)
+    row_cfg = dict(baseline_row_cfg)
+    row_cfg["cfg_idx"] = REINFLOW_CFG_IDX
+
+    if metrics_path.is_file():
+        print(f"[skip] {run_name}: ReinFlow RL selesai (metrics.json ada)")
+        if resume_from_results_csv and not row_key_ok_exists(results_csv, rk):
+            sync_csv_from_metrics_if_needed(
+                results_csv,
+                hp_cols,
+                row_cfg,
+                REINFLOW_CFG_IDX,
+                seed,
+                profile,
+                fold_i,
+                run_dir,
+                run_dir / "flow_policy_after_rl.pt",
+                metrics_path,
+            )
+        return
+
+    if resume_from_results_csv and row_key_ok_exists(results_csv, rk):
+        print(f"[skip] {run_name}: sudah status=ok di results.csv")
+        return
+
+    bc_ckpt = runs_root / f"baseline_seed{seed}_{profile}" / "checkpoints" / "latest.ckpt"
+    if not bc_ckpt.is_file():
+        print(f"[error] {run_name}: tidak ada BC checkpoint: {bc_ckpt}")
+        append_results_csv(
+            results_csv,
+            {
+                "cfg_idx": REINFLOW_CFG_IDX,
+                "seed": seed,
+                "profile": profile,
+                "fold": fold_i,
+                **{k: row_cfg[k] for k in hp_cols},
+                **empty_metrics_row(),
+                "train_loss_final": "",
+                "val_loss_final": "",
+                "n_infer_episodes": "",
+                "checkpoint_path": str(bc_ckpt),
+                "status": "missing_bc_checkpoint",
+            },
+            hp_cols,
+        )
+        return
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env.setdefault("WANDB_MODE", "offline")
+    cmd = [
+        py,
+        str(reinflow_py),
+        "--bc-checkpoint",
+        str(bc_ckpt.resolve()),
+        "--output-dir",
+        str(run_dir.resolve()),
+        "--seed",
+        str(int(seed)),
+        "--total-updates",
+        str(int(total_updates)),
+        "--n-infer-episodes",
+        str(int(n_infer_episodes)),
+        "--n-train-val-episodes",
+        str(int(n_train_val_episodes)),
+        "--train-val-eval-seed-offset",
+        str(int(train_val_eval_seed_offset)),
+    ]
+    if skip_inference_videos:
+        cmd.append("--skip-inference-videos")
+
+    print("\n" + "=" * 72)
+    print(f"[reinflow_rl] {run_name}")
+    print("BC checkpoint:", bc_ckpt.resolve())
+    print("Keluaran:", run_dir.resolve())
+    print("=" * 72 + "\n")
+
+    r = subprocess.run(cmd, cwd=cwd_train, env=env)
+    tr_l, va_l = load_training_final(run_dir)
+    ckpt_out = run_dir / "flow_policy_after_rl.pt"
+    if r.returncode != 0 or not metrics_path.is_file():
+        append_results_csv(
+            results_csv,
+            {
+                "cfg_idx": REINFLOW_CFG_IDX,
+                "seed": seed,
+                "profile": profile,
+                "fold": fold_i,
+                **{k: row_cfg[k] for k in hp_cols},
+                **empty_metrics_row(),
+                "train_loss_final": tr_l,
+                "val_loss_final": va_l,
+                "n_infer_episodes": n_infer_episodes,
+                "checkpoint_path": str(ckpt_out),
+                "status": f"reinflow_rl_failed_{r.returncode}",
+            },
+            hp_cols,
+        )
+        return
+
+    with open(metrics_path) as f:
+        met = json.load(f)
+    mrow = metrics_row_from_infer_json(met)
+    append_results_csv(
+        results_csv,
+        {
+            "cfg_idx": REINFLOW_CFG_IDX,
+            "seed": seed,
+            "profile": profile,
+            "fold": fold_i,
+            **{k: row_cfg[k] for k in hp_cols},
+            **mrow,
+            "train_loss_final": tr_l,
+            "val_loss_final": va_l,
+            "n_infer_episodes": met.get(
+                "test_n_infer_episodes",
+                met.get("n_infer_episodes", n_infer_episodes),
+            ),
+            "checkpoint_path": str(ckpt_out),
+            "status": "ok",
+        },
+        hp_cols,
+    )
 
 
 def execute_one_job(
@@ -704,11 +866,23 @@ def main():
         help="Hanya optimasi Bayesian (tanpa baseline).",
     )
     ap.add_argument(
+        "--reinflow-rl-only",
+        action="store_true",
+        help="Hanya fine-tuning RL online bergaya ReinFlow (tanpa baseline). "
+        "Membutuhkan checkpoint BC di runs/baseline_seed{seed}_{profile}/.",
+    )
+    ap.add_argument(
+        "--reinflow-total-updates",
+        type=int,
+        default=50,
+        help="Jumlah siklus rollout+PPO untuk setiap job ReinFlow RL.",
+    )
+    ap.add_argument(
         "--hyperparam-search",
         type=str,
-        choices=("bayesian", "random"),
+        choices=("bayesian", "random", "reinflow"),
         default="bayesian",
-        help="Strategi pencarian hiperparameter setelah baseline (default: bayesian).",
+        help="Strategi setelah baseline: bayesian, random, atau reinflow (RL online).",
     )
     ap.add_argument(
         "--bo-objective",
@@ -745,12 +919,20 @@ def main():
         ap.error("--baseline-only dan --random-search-only saling meniadakan.")
     if args.baseline_only and args.bayesian_search_only:
         ap.error("--baseline-only dan --bayesian-search-only saling meniadakan.")
+    if args.baseline_only and args.reinflow_rl_only:
+        ap.error("--baseline-only dan --reinflow-rl-only saling meniadakan.")
     if args.random_search_only and args.bayesian_search_only:
         ap.error("--random-search-only dan --bayesian-search-only saling meniadakan.")
+    if args.random_search_only and args.reinflow_rl_only:
+        ap.error("--random-search-only dan --reinflow-rl-only saling meniadakan.")
+    if args.bayesian_search_only and args.reinflow_rl_only:
+        ap.error("--bayesian-search-only dan --reinflow-rl-only saling meniadakan.")
     if args.random_search_only:
         eff_search = "random"
     elif args.bayesian_search_only:
         eff_search = "bayesian"
+    elif args.reinflow_rl_only:
+        eff_search = "reinflow"
     else:
         eff_search = str(args.hyperparam_search)
 
@@ -774,6 +956,7 @@ def main():
                             "baseline_only": bool(args.baseline_only),
                             "random_search_only": bool(args.random_search_only),
                             "bayesian_search_only": bool(args.bayesian_search_only),
+                            "reinflow_rl_only": bool(args.reinflow_rl_only),
                             "hyperparam_search": eff_search,
                             "checkpoint_every": args.checkpoint_every,
                         },
@@ -837,18 +1020,23 @@ def main():
     py = sys.executable
     train_py = FLOWPOLICY_ROOT / "train.py"
     infer_py = FLOWPOLICY_ROOT / "infer_kitchen.py"
+    reinflow_py = FLOWPOLICY_ROOT / "train_reinflow_rl.py"
     cwd_train = str(FLOWPOLICY_ROOT.resolve())
     hp_cols = list(SEARCH_SPACE.keys())
     split_fold_idx = int(fold_entry["fold"])
 
     n_base = len(args.seeds) * len(args.profiles)
-    n_search_planned = int(args.n_configs) * len(args.seeds) * len(args.profiles)
+    if eff_search == "reinflow":
+        n_search_planned = len(args.seeds) * len(args.profiles)
+    else:
+        n_search_planned = int(args.n_configs) * len(args.seeds) * len(args.profiles)
     n_rs_done = len(args.seeds) * len(args.profiles) * len(sampled_cfgs)
-    search_label = (
-        "optimasi Bayesian (GP + EI)"
-        if eff_search == "bayesian"
-        else "random search"
-    )
+    if eff_search == "bayesian":
+        search_label = "optimasi Bayesian (GP + EI)"
+    elif eff_search == "random":
+        search_label = "random search"
+    else:
+        search_label = "fine-tuning RL online (ReinFlow-style, PPO + injeksi noise)"
     if args.baseline_only:
         print(
             "\n>>> Mode --baseline-only: hanya baseline "
@@ -872,6 +1060,13 @@ def main():
             "    Satu partisi train/val, tanpa k-fold.\n"
             f"    VRAM: max_batch_size={args.max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
+        )
+    elif args.reinflow_rl_only:
+        print(
+            f"\n>>> Mode --reinflow-rl-only: hanya {search_label} "
+            f"({n_search_planned} job).\n"
+            "    Membutuhkan ``runs/baseline_seed{{seed}}_{{profile}}/checkpoints/latest.ckpt``.\n"
+            f"    total_updates={args.reinflow_total_updates} per job.\n"
         )
     else:
         print(
@@ -962,6 +1157,28 @@ def main():
                 configs_path, baseline_cfg, sampled_cfgs, search_mode="bayesian"
             )
 
+    def run_reinflow_phase() -> None:
+        for seed in args.seeds:
+            for profile in args.profiles:
+                execute_reinflow_job(
+                    seed=seed,
+                    profile=profile,
+                    fold_i=split_fold_idx,
+                    runs_root=runs_root,
+                    results_csv=results_csv,
+                    hp_cols=hp_cols,
+                    py=py,
+                    reinflow_py=reinflow_py,
+                    cwd_train=cwd_train,
+                    n_infer_episodes=args.n_infer_episodes,
+                    n_train_val_episodes=args.n_train_val_episodes,
+                    train_val_eval_seed_offset=args.train_val_eval_seed_offset,
+                    skip_inference_videos=args.skip_inference_videos,
+                    baseline_row_cfg=baseline_cfg,
+                    resume_from_results_csv=random_search_resume_from_csv,
+                    total_updates=args.reinflow_total_updates,
+                )
+
     if args.baseline_only:
         run_grid_for_configs([baseline_cfg])
     elif args.random_search_only:
@@ -971,10 +1188,14 @@ def main():
         )
     elif args.bayesian_search_only:
         run_bayesian_trials()
+    elif args.reinflow_rl_only:
+        run_reinflow_phase()
     else:
         run_grid_for_configs([baseline_cfg])
         if eff_search == "bayesian":
             run_bayesian_trials()
+        elif eff_search == "reinflow":
+            run_reinflow_phase()
         else:
             run_grid_for_configs(
                 sampled_cfgs,

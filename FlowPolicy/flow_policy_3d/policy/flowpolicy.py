@@ -1,6 +1,6 @@
 import sys
 sys.path.append('FlowPolicy/flow_policy_3d')
-from typing import Dict
+from typing import Dict, Optional
 import math
 import torch
 import torch.nn as nn
@@ -143,7 +143,13 @@ class FlowPolicy(BasePolicy):
         print_params(self)
         
     # ========= inference  ============
-    def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def predict_action(
+        self,
+        obs_dict: Dict[str, torch.Tensor],
+        *,
+        deterministic: bool = False,
+        generator: Optional[torch.Generator] = None,
+    ) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
         result: must include "action" key
@@ -193,13 +199,21 @@ class FlowPolicy(BasePolicy):
             cond_data[:,:To,Da:] = nobs_features
             cond_mask[:,:To,Da:] = True
         
-        # run sampling
-        noise = torch.randn(
-            size=cond_data.shape, 
-            dtype=cond_data.dtype,
-            device=cond_data.device,
-            generator=None)
-        z = noise.detach().clone() # a0
+        # run sampling (deterministic: SDE tanpa noise acak — mean policy untuk RL / eval)
+        if deterministic:
+            noise = torch.zeros(
+                size=cond_data.shape,
+                dtype=cond_data.dtype,
+                device=cond_data.device,
+            )
+        else:
+            noise = torch.randn(
+                size=cond_data.shape,
+                dtype=cond_data.dtype,
+                device=cond_data.device,
+                generator=generator,
+            )
+        z = noise.detach().clone()  # a0
 
         sde = ConsistencyFM('gaussian', 
                             noise_scale=1.0,  
@@ -259,7 +273,16 @@ class FlowPolicy(BasePolicy):
                 pass
             # #endregion
             pred_sigma = pred + (sigma_t**2)/(2*(sde.noise_scale**2)*((1.-num_t)**2)) * (0.5 * num_t * (1.-num_t) * pred - 0.5 * (2.-num_t)*z.detach().clone())
-            z = z.detach().clone() + pred_sigma * dt + sigma_t * np.sqrt(dt) * torch.randn_like(pred_sigma).to(device)
+            if deterministic:
+                z = z.detach().clone() + pred_sigma * dt
+            else:
+                inc = sigma_t * float(np.sqrt(dt)) * torch.randn(
+                    pred_sigma.shape,
+                    dtype=pred_sigma.dtype,
+                    device=pred_sigma.device,
+                    generator=generator,
+                )
+                z = z.detach().clone() + pred_sigma * dt + inc
         z[cond_mask] = cond_data[cond_mask] # a1
         # unnormalize prediction
         naction_pred = z[...,:Da]
