@@ -8,6 +8,5 @@ exec python3 scripts/run_experiment.py \
   --baseline-only \
   --seeds 0 42 101 \
   --profiles standard minimal \
-  --sampling-seed 99 \
   --cv-seed 12345 \
   "$@"

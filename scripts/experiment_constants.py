@@ -1,4 +1,13 @@
-"""Konstanta ruang pencarian hyperparameter untuk eksperimen FlowPolicy Kitchen."""
+"""Konstanta ruang pencarian hyperparameter untuk eksperimen FlowPolicy Kitchen.
+
+Pencarian hiperparameter memakai Hyperband (Li et al., 2018,
+https://arxiv.org/pdf/1603.06560). Karena ``training.num_epochs`` adalah
+resource Hyperband (R), kunci ini DIKELUARKAN dari ``SEARCH_SPACE`` agar tidak
+disampling sebagai dimensi pencarian. Nilai ``training.num_epochs`` yang
+benar-benar dilatih untuk tiap baris ``results.csv`` tetap dicatat sebagai
+kolom hiperparameter (``CSV_HPARAM_KEYS``) — untuk baseline = 3000,
+untuk pemenang Hyperband final = R.
+"""
 
 from __future__ import annotations
 
@@ -21,11 +30,14 @@ DEFAULT_BASELINE_HPARAMS = {
 }
 
 BASELINE_CFG_IDX = -1
-# Fine-tuning RL online (ReinFlow-style); baris terpisah di results.csv dari baseline / BO / RS.
-REINFLOW_CFG_IDX = -2
+# Pemenang final Hyperband yang di-rerun pada 3 seeds × 2 profiles.
+HYPERBAND_BEST_CFG_IDX = -3
+# Cfg_idx untuk konfigurasi yang dievaluasi di dalam fase Hyperband
+# (mulai dari basis ini agar tidak bentrok dengan baseline / pemenang final).
+HYPERBAND_CFG_IDX_BASE = 1000
 
+# Ruang pencarian Hyperband (tanpa ``training.num_epochs`` — itu resource R).
 SEARCH_SPACE = {
-    "training.num_epochs": [500, 1000, 3000, 5000],
     "optimizer.lr": [1e-3, 5e-4, 1e-4, 1e-5],
     "dataloader.batch_size": [64, 128, 256, 512],
     "policy.Conditional_ConsistencyFM.num_segments": [1, 2, 3, 4],
@@ -37,8 +49,10 @@ SEARCH_SPACE = {
     "_state_mlp_hidden": [128, 256, 512, 1024],
 }
 
-# Kolom hiperparameter di CSV (tanpa prefix policy untuk CFM agar rapi)
-CSV_HPARAM_KEYS = list(SEARCH_SPACE.keys())
+# Kolom hiperparameter di CSV (tanpa prefix policy untuk CFM agar rapi).
+# Kolom pertama: ``training.num_epochs`` — nilai aktual epoch yang dilatih
+# (baseline = 3000; Hyperband final winner = R; baris intermediate HB = r_i terakhir).
+CSV_HPARAM_KEYS: List[str] = ["training.num_epochs"] + list(SEARCH_SPACE.keys())
 
 
 def compute_horizon(n_obs_steps: int, n_action_steps: int) -> int:
@@ -52,29 +66,31 @@ def baseline_config_dict() -> dict:
     return out
 
 
-def sample_configs(rng: np.random.RandomState, n: int) -> List[Dict[str, Any]]:
-    """Random search: `cfg_idx` 0 .. n-1."""
+def sample_configs_hyperband(
+    rng: np.random.RandomState,
+    n: int,
+    *,
+    base_cfg_idx: int = HYPERBAND_CFG_IDX_BASE,
+) -> List[Dict[str, Any]]:
+    """Sample ``n`` konfigurasi random dari ``SEARCH_SPACE`` untuk Hyperband.
+
+    ``training.num_epochs`` TIDAK disampling (= resource Hyperband). Field itu
+    diset ke ``0`` di sini lalu di-overwrite menjadi ``r_i`` aktual saat training
+    rung berjalan, dan menjadi ``R`` final saat config menyelesaikan rung terakhir.
+    Cfg_idx unik global mulai dari ``base_cfg_idx``.
+    """
     out: List[Dict[str, Any]] = []
     keys = list(SEARCH_SPACE.keys())
-    for i in range(n):
-        d: Dict[str, Any] = {"cfg_idx": i}
+    for i in range(int(n)):
+        d: Dict[str, Any] = {
+            "cfg_idx": int(base_cfg_idx) + i,
+            "training.num_epochs": 0,
+        }
         for k in keys:
             choices = SEARCH_SPACE[k]
             d[k] = choices[int(rng.randint(0, len(choices)))]
         out.append(d)
     return out
-
-
-def config_vector_to_dict(x: List[Any], cfg_idx: int) -> Dict[str, Any]:
-    """Satu titik ruang pencarian (urutan = CSV_HPARAM_KEYS) → dict cfg Hydra."""
-    d: Dict[str, Any] = {"cfg_idx": int(cfg_idx)}
-    for k, v in zip(CSV_HPARAM_KEYS, x):
-        d[k] = v
-    return d
-
-
-def config_dict_to_vector(cfg: Dict[str, Any]) -> List[Any]:
-    return [cfg[k] for k in CSV_HPARAM_KEYS]
 
 
 # Kolom tambahan results.csv (metrik infer dua fase + alias kompatibel).

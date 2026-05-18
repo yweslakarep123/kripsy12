@@ -1,25 +1,41 @@
 #!/usr/bin/env python3
 """
-Orkestrator eksperimen (tanpa k-fold):
+Orkestrator eksperimen (tanpa k-fold, satu partisi train/val/test):
 
   1) Baseline — hyperparameter default × len(seeds) × len(profiles)
-  2) Pencarian — ``bayesian``, ``random``, atau ``reinflow`` (RL online FlowPolicy, bukan BO/RS).
+  2) Pencarian — **Hyperband** (Li et al., 2018, https://arxiv.org/pdf/1603.06560).
 
-Flag **`--baseline-only`** hanya baseline; fase pencarian dilewati.
-**`--random-search-only`** / **`--bayesian-search-only`** / **`--reinflow-rl-only`** hanya fase tersebut (baseline dilewati, kecuali ``reinflow`` dipakai bersama baseline di pipeline penuh).
+Hyperband berjalan pada **satu seed × satu profile** (default: seed=0,
+profile=standard) menggunakan ``val_loss`` sebagai sinyal early-stopping
+antar-rung. Setelah Hyperband selesai, konfigurasi pemenang (val_loss
+terkecil seenough across all evaluations sesuai paper) di-**rerun penuh**
+pada semua ``seeds × profiles`` user (default 3 × 2 = 6 run) dengan training
++ inference + write ``results.csv`` ``status=ok`` — analog baseline.
 
-Metrik inferensi: fase train/val (sim) + fase test; metrik simulasi akhir training (``training_sim_*``)
-dari ``training_sim_metrics.json``; success total & k1–k4; latensi global + rata-rata per-episod;
-``trade_off`` dan ``trade_off_episode_latency``. Video: MP4 inferensi per-episod di ``inference_videos/``,
-bukan video rollout training di W&B.
+Flag mutually exclusive:
 
-Resume: metrik lengkap (metrics.json) dilewati; baseline dan Bayesian melewati job jika
-baris results.csv yang sama sudah status=ok. Random search secara default tidak
-memakai results.csv untuk lewati; jika ``--results-csv`` diisi, file itu dipakai
-(termasuk lewati random search bila status=ok). Tanpa ``--results-csv``, file CSV
-adalah ``<output-dir>/results.csv``.
-Training terputus dilanjutkan (resume Hydra) jika ada latest.ckpt tanpa training_final.json;
-infer saja jika training sudah selesai (training_final.json + ckpt) tanpa metrics.json.
+- ``--baseline-only`` — hanya baseline; Hyperband dilewati.
+- ``--hyperband-only`` — hanya Hyperband (skip baseline; butuh ``--zarr-path``
+  tetap valid).
+
+Tanpa flag: jalankan baseline lalu Hyperband berurutan.
+
+Metrik inferensi: fase train/val (sim) + fase test; metrik simulasi akhir
+training (``training_sim_*``) dari ``training_sim_metrics.json``; success total
+& k1–k4; latensi global + rata-rata per-episod; ``trade_off`` dan
+``trade_off_episode_latency``. Video: MP4 inferensi per-episod di
+``inference_videos/``, bukan video rollout training di W&B.
+
+Resume:
+
+- Baseline & pemenang Hyperband (cfg_idx=-3): metrik lengkap (``metrics.json``)
+  dilewati; juga dilewati jika baris ``results.csv`` yang sama sudah ``status=ok``.
+- Training terputus dilanjutkan (resume Hydra) jika ada ``latest.ckpt`` tanpa
+  ``training_final.json``; infer saja jika ``training_final.json`` + ckpt sudah
+  ada tetapi belum ``metrics.json``.
+- Hyperband: ``hyperband_state.json`` di ``--output-dir`` menyimpan state
+  bracket + rung + ``val_loss`` per config — resume otomatis melewati rung yang
+  sudah dievaluasi.
 """
 
 from __future__ import annotations
@@ -31,10 +47,8 @@ import os
 import pathlib
 import subprocess
 import sys
-import time
 from typing import Any, Dict, List, Tuple
 
-import numpy as np
 import pandas as pd
 
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
@@ -45,17 +59,15 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from cv_splits import build_single_train_val_split, save_splits  # noqa: E402
 from experiment_constants import (  # noqa: E402
     BASELINE_CFG_IDX,
-    REINFLOW_CFG_IDX,
     CSV_HPARAM_KEYS,
+    HYPERBAND_BEST_CFG_IDX,
     RESULTS_CSV_METRIC_COLUMNS,
-    SEARCH_SPACE,
     baseline_config_dict,
     compute_horizon,
-    config_vector_to_dict,
     empty_metrics_row,
     metrics_row_from_infer_json,
-    sample_configs,
 )
+from hyperband_search import run_hyperband  # noqa: E402
 
 
 def _fmt_hydra_val(v: Any) -> str:
@@ -74,105 +86,42 @@ def apply_vram_limits(cfg: Dict[str, Any], max_batch: int) -> Dict[str, Any]:
 
 def load_or_create_config_bundle(
     configs_path: pathlib.Path,
-    sampling_seed: int,
-    n_configs: int,
     max_batch: int,
-    *,
-    search_mode: str,
-) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    """
-    Return ``(baseline_cfg, sampled_cfgs)``.
+) -> Dict[str, Any]:
+    """Muat / buat ``configs.json`` (``version: 5``) dengan baseline saja.
 
-    - ``search_mode == "random"``: ``sampled`` berisi ``n_configs`` sampel sekaligus (``version`` 2).
-    - ``search_mode == "bayesian"``: ``sampled`` boleh kosong lalu diisi per trial (``version`` 3).
-    - ``search_mode == "reinflow"``: tidak memakai ``sampled``; fase RL online (``version`` 4).
+    Hyperband menyimpan state-nya di ``hyperband_state.json`` (lihat
+    ``scripts/hyperband_search.py``). File ini hanya menyimpan baseline
+    yang dipakai fase-1 dan re-run pemenang final.
     """
     baseline = apply_vram_limits(baseline_config_dict(), max_batch)
-    sm = str(search_mode).lower()
-    if sm not in ("random", "bayesian", "reinflow"):
-        raise ValueError(f"search_mode tidak valid: {search_mode}")
 
     raw: Any = None
     if configs_path.is_file():
         text = configs_path.read_text(encoding="utf-8").strip()
         if not text:
             print("[warn] configs.json kosong; akan dibuat ulang.")
-        else:
+        elif text:
             try:
                 raw = json.loads(text)
             except json.JSONDecodeError as e:
                 print(f"[warn] configs.json bukan JSON valid ({e}); akan dibuat ulang.")
 
-    if raw is not None:
-        if isinstance(raw, list):
-            sampled = [apply_vram_limits(dict(x), max_batch) for x in raw]
-            bundle = {"version": 2, "baseline": baseline, "sampled": sampled}
-            with open(configs_path, "w") as fw:
-                json.dump(bundle, fw, indent=2)
-            print(
-                "[info] configs.json format lama (array) dimigrasi ke {baseline, sampled}."
-            )
-            return baseline, sampled
-        if isinstance(raw, dict) and "sampled" in raw:
-            b = raw.get("baseline")
-            if isinstance(b, dict):
-                baseline = apply_vram_limits(
-                    {**baseline, **b, "cfg_idx": BASELINE_CFG_IDX}, max_batch
-                )
-            sampled = [
-                apply_vram_limits(dict(x), max_batch) for x in raw["sampled"]
-            ]
-            return baseline, sampled
+    if isinstance(raw, dict) and isinstance(raw.get("baseline"), dict):
+        b = raw["baseline"]
+        baseline = apply_vram_limits(
+            {**baseline, **b, "cfg_idx": BASELINE_CFG_IDX}, max_batch
+        )
 
     configs_path.parent.mkdir(parents=True, exist_ok=True)
-    if sm == "bayesian":
-        bundle = {
-            "version": 3,
-            "search_mode": "bayesian",
-            "baseline": baseline,
-            "sampled": [],
-        }
-        with open(configs_path, "w") as f:
-            json.dump(bundle, f, indent=2)
-        return baseline, []
-
-    if sm == "reinflow":
-        bundle = {
-            "version": 4,
-            "search_mode": "reinflow",
-            "baseline": baseline,
-            "sampled": [],
-        }
-        with open(configs_path, "w") as f:
-            json.dump(bundle, f, indent=2)
-        return baseline, []
-
-    rng = np.random.RandomState(sampling_seed)
-    sampled = [apply_vram_limits(c, max_batch) for c in sample_configs(rng, n_configs)]
-    bundle = {"version": 2, "search_mode": "random", "baseline": baseline, "sampled": sampled}
-    with open(configs_path, "w") as f:
-        json.dump(bundle, f, indent=2)
-    return baseline, sampled
-
-
-def write_config_bundle(
-    configs_path: pathlib.Path,
-    baseline: Dict[str, Any],
-    sampled: List[Dict[str, Any]],
-    *,
-    search_mode: str,
-) -> None:
-    sm = str(search_mode).lower()
-    ver = 4 if sm == "reinflow" else (3 if sm == "bayesian" else 2)
-    bundle: Dict[str, Any] = {
-        "version": ver,
-        "search_mode": sm,
+    bundle = {
+        "version": 5,
+        "search_mode": "hyperband",
         "baseline": baseline,
-        "sampled": sampled,
     }
-    configs_path.parent.mkdir(parents=True, exist_ok=True)
     with open(configs_path, "w") as f:
         json.dump(bundle, f, indent=2)
+    return baseline
 
 
 def build_train_overrides(
@@ -385,154 +334,6 @@ def run_infer_subprocess(
         vdir = pathlib.Path(metrics_path).parent / "inference_videos"
         cmd.extend(["--inference-videos-dir", str(vdir.resolve())])
     return subprocess.run(cmd, cwd=cwd_train, env=env).returncode
-
-
-def execute_reinflow_job(
-    *,
-    seed: int,
-    profile: str,
-    fold_i: int,
-    runs_root: pathlib.Path,
-    results_csv: pathlib.Path,
-    hp_cols: List[str],
-    py: str,
-    reinflow_py: pathlib.Path,
-    cwd_train: str,
-    n_infer_episodes: int,
-    n_train_val_episodes: int,
-    train_val_eval_seed_offset: int,
-    skip_inference_videos: bool,
-    baseline_row_cfg: Dict[str, Any],
-    resume_from_results_csv: bool,
-    total_updates: int,
-) -> None:
-    """Fine-tuning RL online (ReinFlow-style) dari ``baseline_seed*/checkpoints/latest.ckpt``."""
-    run_name = f"reinflow_rl_seed{seed}_{profile}"
-    run_dir = runs_root / run_name
-    metrics_path = run_dir / "metrics.json"
-    rk = (REINFLOW_CFG_IDX, seed, profile, fold_i)
-    row_cfg = dict(baseline_row_cfg)
-    row_cfg["cfg_idx"] = REINFLOW_CFG_IDX
-
-    if metrics_path.is_file():
-        print(f"[skip] {run_name}: ReinFlow RL selesai (metrics.json ada)")
-        if resume_from_results_csv and not row_key_ok_exists(results_csv, rk):
-            sync_csv_from_metrics_if_needed(
-                results_csv,
-                hp_cols,
-                row_cfg,
-                REINFLOW_CFG_IDX,
-                seed,
-                profile,
-                fold_i,
-                run_dir,
-                run_dir / "flow_policy_after_rl.pt",
-                metrics_path,
-            )
-        return
-
-    if resume_from_results_csv and row_key_ok_exists(results_csv, rk):
-        print(f"[skip] {run_name}: sudah status=ok di results.csv")
-        return
-
-    bc_ckpt = runs_root / f"baseline_seed{seed}_{profile}" / "checkpoints" / "latest.ckpt"
-    if not bc_ckpt.is_file():
-        print(f"[error] {run_name}: tidak ada BC checkpoint: {bc_ckpt}")
-        append_results_csv(
-            results_csv,
-            {
-                "cfg_idx": REINFLOW_CFG_IDX,
-                "seed": seed,
-                "profile": profile,
-                "fold": fold_i,
-                **{k: row_cfg[k] for k in hp_cols},
-                **empty_metrics_row(),
-                "train_loss_final": "",
-                "val_loss_final": "",
-                "n_infer_episodes": "",
-                "checkpoint_path": str(bc_ckpt),
-                "status": "missing_bc_checkpoint",
-            },
-            hp_cols,
-        )
-        return
-
-    run_dir.mkdir(parents=True, exist_ok=True)
-    env = os.environ.copy()
-    env.setdefault("WANDB_MODE", "offline")
-    cmd = [
-        py,
-        str(reinflow_py),
-        "--bc-checkpoint",
-        str(bc_ckpt.resolve()),
-        "--output-dir",
-        str(run_dir.resolve()),
-        "--seed",
-        str(int(seed)),
-        "--total-updates",
-        str(int(total_updates)),
-        "--n-infer-episodes",
-        str(int(n_infer_episodes)),
-        "--n-train-val-episodes",
-        str(int(n_train_val_episodes)),
-        "--train-val-eval-seed-offset",
-        str(int(train_val_eval_seed_offset)),
-    ]
-    if skip_inference_videos:
-        cmd.append("--skip-inference-videos")
-
-    print("\n" + "=" * 72)
-    print(f"[reinflow_rl] {run_name}")
-    print("BC checkpoint:", bc_ckpt.resolve())
-    print("Keluaran:", run_dir.resolve())
-    print("=" * 72 + "\n")
-
-    r = subprocess.run(cmd, cwd=cwd_train, env=env)
-    tr_l, va_l = load_training_final(run_dir)
-    ckpt_out = run_dir / "flow_policy_after_rl.pt"
-    if r.returncode != 0 or not metrics_path.is_file():
-        append_results_csv(
-            results_csv,
-            {
-                "cfg_idx": REINFLOW_CFG_IDX,
-                "seed": seed,
-                "profile": profile,
-                "fold": fold_i,
-                **{k: row_cfg[k] for k in hp_cols},
-                **empty_metrics_row(),
-                "train_loss_final": tr_l,
-                "val_loss_final": va_l,
-                "n_infer_episodes": n_infer_episodes,
-                "checkpoint_path": str(ckpt_out),
-                "status": f"reinflow_rl_failed_{r.returncode}",
-            },
-            hp_cols,
-        )
-        return
-
-    with open(metrics_path) as f:
-        met = json.load(f)
-    mrow = metrics_row_from_infer_json(met)
-    append_results_csv(
-        results_csv,
-        {
-            "cfg_idx": REINFLOW_CFG_IDX,
-            "seed": seed,
-            "profile": profile,
-            "fold": fold_i,
-            **{k: row_cfg[k] for k in hp_cols},
-            **mrow,
-            "train_loss_final": tr_l,
-            "val_loss_final": va_l,
-            "n_infer_episodes": met.get(
-                "test_n_infer_episodes",
-                met.get("n_infer_episodes", n_infer_episodes),
-            ),
-            "checkpoint_path": str(ckpt_out),
-            "status": "ok",
-        },
-        hp_cols,
-    )
 
 
 def execute_one_job(
@@ -805,14 +606,6 @@ def main():
         "--profiles", type=str, nargs="+", default=["standard", "minimal"]
     )
     ap.add_argument(
-        "--n-configs",
-        type=int,
-        default=10,
-        help="Jumlah konfigurasi pencarian (random: disampling sekaligus; "
-        "bayesian: jumlah trial BO berurutan). Total run ≈ n × |seeds| × |profiles|.",
-    )
-    ap.add_argument("--sampling-seed", type=int, default=99)
-    ap.add_argument(
         "--cv-seed",
         type=int,
         default=12345,
@@ -826,9 +619,8 @@ def main():
         default=None,
         metavar="PATH",
         help="Jalur results.csv (relatif ke akar repo atau absolut). "
-        "Default: <output-dir>/results.csv. Jika diisi: semua fase menulis ke file ini "
-        "dan random search melewati job yang sudah punya baris status=ok untuk "
-        "(cfg_idx, seed, profile, fold) yang sama.",
+        "Default: <output-dir>/results.csv. Jika diisi, semua fase menulis ke file "
+        "ini dan melewati job (cfg_idx, seed, profile, fold) yang sudah status=ok.",
     )
     ap.add_argument(
         "--zarr-path",
@@ -853,43 +645,60 @@ def main():
     ap.add_argument(
         "--baseline-only",
         action="store_true",
-        help="Hanya baseline (3 seed × 2 profil = 6 run default); tanpa random search.",
+        help="Hanya baseline (3 seed × 2 profil = 6 run default); tanpa Hyperband.",
     )
     ap.add_argument(
-        "--random-search-only",
+        "--hyperband-only",
         action="store_true",
-        help="Hanya random search (tanpa baseline).",
+        help="Hanya Hyperband + re-run pemenang top-1 (tanpa baseline).",
     )
     ap.add_argument(
-        "--bayesian-search-only",
-        action="store_true",
-        help="Hanya optimasi Bayesian (tanpa baseline).",
-    )
-    ap.add_argument(
-        "--reinflow-rl-only",
-        action="store_true",
-        help="Hanya fine-tuning RL online bergaya ReinFlow (tanpa baseline). "
-        "Membutuhkan checkpoint BC di runs/baseline_seed{seed}_{profile}/.",
-    )
-    ap.add_argument(
-        "--reinflow-total-updates",
+        "--hyperband-max-epochs",
         type=int,
-        default=50,
-        help="Jumlah siklus rollout+PPO untuk setiap job ReinFlow RL.",
+        default=3000,
+        metavar="R",
+        help="Hyperband: resource maksimum per konfigurasi (R, default 3000 = "
+        "baseline default num_epochs).",
     )
     ap.add_argument(
-        "--hyperparam-search",
-        type=str,
-        choices=("bayesian", "random", "reinflow"),
-        default="bayesian",
-        help="Strategi setelah baseline: bayesian, random, atau reinflow (RL online).",
+        "--hyperband-eta",
+        type=int,
+        default=3,
+        help="Hyperband: rasio downsampling antar-rung (eta, default 3 sesuai paper).",
     )
     ap.add_argument(
-        "--bo-objective",
+        "--hyperband-s-min",
+        type=int,
+        default=0,
+        help="Hyperband: indeks bracket terkecil yang dijalankan (default 0 = semua "
+        "bracket hingga s=0/random search). Naikkan ke 2 untuk hanya single-bracket "
+        "SHA (lebih hemat waktu) — lihat README untuk anggaran waktu.",
+    )
+    ap.add_argument(
+        "--hyperband-s-max",
+        type=int,
+        default=None,
+        metavar="S",
+        help="Hyperband: indeks bracket terbesar (default = floor(log_eta(R))). "
+        "Cap di bawah nilai native untuk hindari bracket dengan banyak config kecil-r.",
+    )
+    ap.add_argument(
+        "--hyperband-seed",
+        type=int,
+        default=99,
+        help="Seed RNG sampling konfigurasi Hyperband (reproducible).",
+    )
+    ap.add_argument(
+        "--hyperband-search-train-seed",
+        type=int,
+        default=0,
+        help="Seed training yang dipakai SELAMA fase Hyperband (1 seed saja agar cepat).",
+    )
+    ap.add_argument(
+        "--hyperband-search-profile",
         type=str,
-        choices=("neg_trade_off", "neg_k4"),
-        default="neg_trade_off",
-        help="BO meminimalkan -mean(test_trade_off) atau -mean(test success k4).",
+        default="standard",
+        help="Profil preprocessing yang dipakai SELAMA fase Hyperband (1 profil saja).",
     )
     ap.add_argument(
         "--n-train-val-episodes",
@@ -915,59 +724,8 @@ def main():
         help="Simpan checkpoint berkala agar training bisa dilanjut setelah mesin mati.",
     )
     args = ap.parse_args()
-    if args.baseline_only and args.random_search_only:
-        ap.error("--baseline-only dan --random-search-only saling meniadakan.")
-    if args.baseline_only and args.bayesian_search_only:
-        ap.error("--baseline-only dan --bayesian-search-only saling meniadakan.")
-    if args.baseline_only and args.reinflow_rl_only:
-        ap.error("--baseline-only dan --reinflow-rl-only saling meniadakan.")
-    if args.random_search_only and args.bayesian_search_only:
-        ap.error("--random-search-only dan --bayesian-search-only saling meniadakan.")
-    if args.random_search_only and args.reinflow_rl_only:
-        ap.error("--random-search-only dan --reinflow-rl-only saling meniadakan.")
-    if args.bayesian_search_only and args.reinflow_rl_only:
-        ap.error("--bayesian-search-only dan --reinflow-rl-only saling meniadakan.")
-    if args.random_search_only:
-        eff_search = "random"
-    elif args.bayesian_search_only:
-        eff_search = "bayesian"
-    elif args.reinflow_rl_only:
-        eff_search = "reinflow"
-    else:
-        eff_search = str(args.hyperparam_search)
-
-    bundle_sm = "random" if args.baseline_only else eff_search
-
-    # #region agent log
-    try:
-        _dbg = REPO_ROOT / ".cursor" / "debug-223216.log"
-        _dbg.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(_dbg, "a", encoding="utf-8") as _df:
-            _df.write(
-                json.dumps(
-                    {
-                        "sessionId": "223216",
-                        "hypothesisId": "A",
-                        "location": "run_experiment.py:main:after_parse_args",
-                        "message": "parse_args ok",
-                        "data": {
-                            "output_dir": args.output_dir,
-                            "baseline_only": bool(args.baseline_only),
-                            "random_search_only": bool(args.random_search_only),
-                            "bayesian_search_only": bool(args.bayesian_search_only),
-                            "reinflow_rl_only": bool(args.reinflow_rl_only),
-                            "hyperparam_search": eff_search,
-                            "checkpoint_every": args.checkpoint_every,
-                        },
-                        "timestamp": int(time.time() * 1000),
-                    }
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # #endregion
+    if args.baseline_only and args.hyperband_only:
+        ap.error("--baseline-only dan --hyperband-only saling meniadakan.")
 
     out_root = (REPO_ROOT / args.output_dir).resolve()
     runs_root = out_root / "runs"
@@ -985,15 +743,8 @@ def main():
         results_csv.parent.mkdir(parents=True, exist_ok=True)
     else:
         results_csv = out_root / "results.csv"
-    random_search_resume_from_csv = bool(args.results_csv)
 
-    baseline_cfg, sampled_cfgs = load_or_create_config_bundle(
-        configs_path,
-        args.sampling_seed,
-        args.n_configs,
-        args.max_batch_size,
-        search_mode=bundle_sm,
-    )
+    baseline_cfg = load_or_create_config_bundle(configs_path, args.max_batch_size)
 
     fold_entry = build_single_train_val_split(
         n_episodes=args.n_episodes,
@@ -1011,77 +762,59 @@ def main():
             "n_grid_partitions": 5,
             "partition_index": 0,
             "cv_seed": args.cv_seed,
-            "sampling_seed": args.sampling_seed,
             "max_batch_size": args.max_batch_size,
-            "hyperparam_search": eff_search,
+            "hyperparam_search": "hyperband",
+            "hyperband_max_epochs": int(args.hyperband_max_epochs),
+            "hyperband_eta": int(args.hyperband_eta),
+            "hyperband_s_min": int(args.hyperband_s_min),
+            "hyperband_s_max": (
+                None if args.hyperband_s_max is None else int(args.hyperband_s_max)
+            ),
         },
     )
 
     py = sys.executable
     train_py = FLOWPOLICY_ROOT / "train.py"
     infer_py = FLOWPOLICY_ROOT / "infer_kitchen.py"
-    reinflow_py = FLOWPOLICY_ROOT / "train_reinflow_rl.py"
     cwd_train = str(FLOWPOLICY_ROOT.resolve())
-    hp_cols = list(SEARCH_SPACE.keys())
+    hp_cols = list(CSV_HPARAM_KEYS)
     split_fold_idx = int(fold_entry["fold"])
 
     n_base = len(args.seeds) * len(args.profiles)
-    if eff_search == "reinflow":
-        n_search_planned = len(args.seeds) * len(args.profiles)
-    else:
-        n_search_planned = int(args.n_configs) * len(args.seeds) * len(args.profiles)
-    n_rs_done = len(args.seeds) * len(args.profiles) * len(sampled_cfgs)
-    if eff_search == "bayesian":
-        search_label = "optimasi Bayesian (GP + EI)"
-    elif eff_search == "random":
-        search_label = "random search"
-    else:
-        search_label = "fine-tuning RL online (ReinFlow-style, PPO + injeksi noise)"
+    n_final = len(args.seeds) * len(args.profiles)
     if args.baseline_only:
         print(
             "\n>>> Mode --baseline-only: hanya baseline "
-            f"({n_base} run). Fase pencarian hiperparameter dilewati.\n"
+            f"({n_base} run). Fase Hyperband dilewati.\n"
             "    Satu partisi train/val, tanpa k-fold.\n"
             f"    VRAM: max_batch_size={args.max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
         )
-    elif args.random_search_only:
+    elif args.hyperband_only:
         print(
-            f"\n>>> Mode --random-search-only: hanya {search_label} "
-            f"({n_rs_done} run). Baseline dilewati.\n"
-            "    Satu partisi train/val, tanpa k-fold.\n"
+            "\n>>> Mode --hyperband-only: Hyperband (1 seed × 1 profile) "
+            f"diikuti rerun top-1 pemenang di {n_final} run "
+            f"({len(args.seeds)} seeds × {len(args.profiles)} profiles).\n"
+            "    Baseline dilewati.\n"
+            f"    R={args.hyperband_max_epochs}, eta={args.hyperband_eta}, "
+            f"s_min={args.hyperband_s_min}, s_max={args.hyperband_s_max}\n"
             f"    VRAM: max_batch_size={args.max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
-        )
-    elif args.bayesian_search_only:
-        print(
-            f"\n>>> Mode --bayesian-search-only: hanya {search_label} "
-            f"(hingga {n_search_planned} run terjadwal).\n"
-            "    Satu partisi train/val, tanpa k-fold.\n"
-            f"    VRAM: max_batch_size={args.max_batch_size}, "
-            f"num_workers={args.dataloader_num_workers}\n"
-        )
-    elif args.reinflow_rl_only:
-        print(
-            f"\n>>> Mode --reinflow-rl-only: hanya {search_label} "
-            f"({n_search_planned} job).\n"
-            "    Membutuhkan ``runs/baseline_seed{{seed}}_{{profile}}/checkpoints/latest.ckpt``.\n"
-            f"    total_updates={args.reinflow_total_updates} per job.\n"
         )
     else:
         print(
             "\n>>> Urutan: (1) Baseline "
-            f"({n_base} run) → (2) {search_label} "
-            f"(hingga {n_search_planned} run). "
+            f"({n_base} run) → (2) Hyperband (1 seed × 1 profile) "
+            f"→ (3) rerun top-1 pemenang ({n_final} run). "
             "Satu partisi train/val, tanpa k-fold.\n"
+            f"    Hyperband: R={args.hyperband_max_epochs}, eta={args.hyperband_eta}, "
+            f"s_min={args.hyperband_s_min}, s_max={args.hyperband_s_max}\n"
             f"    VRAM: max_batch_size={args.max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
         )
 
     def run_grid_for_configs(
         cfgs: List[Dict[str, Any]],
-        *,
-        resume_from_results_csv: bool = True,
     ) -> None:
         for cfg in cfgs:
             cfg_idx = int(cfg["cfg_idx"])
@@ -1089,6 +822,8 @@ def main():
                 for profile in args.profiles:
                     if cfg_idx == BASELINE_CFG_IDX:
                         run_name = f"baseline_seed{seed}_{profile}"
+                    elif cfg_idx == HYPERBAND_BEST_CFG_IDX:
+                        run_name = f"hb_best_seed{seed}_{profile}"
                     else:
                         run_name = f"cfg{cfg_idx}_seed{seed}_{profile}"
                     execute_one_job(
@@ -1113,94 +848,60 @@ def main():
                         n_train_val_episodes=args.n_train_val_episodes,
                         train_val_eval_seed_offset=args.train_val_eval_seed_offset,
                         skip_inference_videos=args.skip_inference_videos,
-                        resume_from_results_csv=resume_from_results_csv,
+                        resume_from_results_csv=True,
                     )
 
-    def run_bayesian_trials() -> None:
-        from bo_search import (
-            aggregate_objective_from_results_csv,
-            ask_next_config,
-            ensure_optimizer_matches_sampled,
-            save_optimizer,
-            tell_objective,
+    def run_hyperband_phase() -> None:
+        """Jalankan Hyperband (single seed × single profile), lalu rerun top-1
+        pemenang pada full ``seeds × profiles`` dengan pipeline train + infer
+        (cfg_idx=``HYPERBAND_BEST_CFG_IDX``)."""
+        best = run_hyperband(
+            out_root=out_root,
+            runs_root=runs_root,
+            R=int(args.hyperband_max_epochs),
+            eta=int(args.hyperband_eta),
+            s_min=int(args.hyperband_s_min),
+            s_max=(None if args.hyperband_s_max is None else int(args.hyperband_s_max)),
+            sampling_seed=int(args.hyperband_seed),
+            search_train_seed=int(args.hyperband_search_train_seed),
+            search_profile=str(args.hyperband_search_profile),
+            train_eps=fold_entry["train_episodes"],
+            val_eps=fold_entry["val_episodes"],
+            zarr_rel=args.zarr_path,
+            checkpoint_every=args.checkpoint_every,
+            dataloader_num_workers=args.dataloader_num_workers,
+            py=py,
+            train_py=train_py,
+            cwd_train=cwd_train,
+            apply_vram_limits_fn=apply_vram_limits,
+            max_batch_size=args.max_batch_size,
         )
+        if best is None:
+            print(
+                "[hyperband] WARNING: tidak ada pemenang; melewati fase rerun top-1."
+            )
+            return
 
-        obj_mode = (
-            "neg_test_trade_off"
-            if args.bo_objective == "neg_trade_off"
-            else "neg_test_success_rate_k4"
+        # Bangun config untuk rerun pemenang pada full ``seeds × profiles``.
+        winner_cfg: Dict[str, Any] = dict(best["hparams"])
+        winner_cfg["cfg_idx"] = HYPERBAND_BEST_CFG_IDX
+        # Latih pemenang dengan resource MAKSIMUM (R epoch), bukan r_i intermediate.
+        winner_cfg["training.num_epochs"] = int(args.hyperband_max_epochs)
+        winner_cfg = apply_vram_limits(winner_cfg, args.max_batch_size)
+        print(
+            f"\n>>> Rerun pemenang Hyperband (cfg_idx={HYPERBAND_BEST_CFG_IDX}) "
+            f"pada {len(args.seeds)} seeds × {len(args.profiles)} profiles "
+            f"@ training.num_epochs={int(args.hyperband_max_epochs)}.\n"
         )
-        n_init = min(max(2, args.n_configs // 2), 6)
-        opt = ensure_optimizer_matches_sampled(
-            out_root,
-            sampled_cfgs,
-            results_csv,
-            args.seeds,
-            args.profiles,
-            random_state=args.sampling_seed,
-            n_initial_points=n_init,
-            objective_mode=obj_mode,
-        )
-        for t in range(len(sampled_cfgs), int(args.n_configs)):
-            x = ask_next_config(opt)
-            cfg = apply_vram_limits(
-                config_vector_to_dict(list(x), t), args.max_batch_size
-            )
-            run_grid_for_configs([cfg])
-            y = aggregate_objective_from_results_csv(
-                results_csv, t, args.seeds, args.profiles, mode=obj_mode
-            )
-            tell_objective(opt, list(x), y)
-            save_optimizer(opt, out_root)
-            sampled_cfgs.append(cfg)
-            write_config_bundle(
-                configs_path, baseline_cfg, sampled_cfgs, search_mode="bayesian"
-            )
-
-    def run_reinflow_phase() -> None:
-        for seed in args.seeds:
-            for profile in args.profiles:
-                execute_reinflow_job(
-                    seed=seed,
-                    profile=profile,
-                    fold_i=split_fold_idx,
-                    runs_root=runs_root,
-                    results_csv=results_csv,
-                    hp_cols=hp_cols,
-                    py=py,
-                    reinflow_py=reinflow_py,
-                    cwd_train=cwd_train,
-                    n_infer_episodes=args.n_infer_episodes,
-                    n_train_val_episodes=args.n_train_val_episodes,
-                    train_val_eval_seed_offset=args.train_val_eval_seed_offset,
-                    skip_inference_videos=args.skip_inference_videos,
-                    baseline_row_cfg=baseline_cfg,
-                    resume_from_results_csv=random_search_resume_from_csv,
-                    total_updates=args.reinflow_total_updates,
-                )
+        run_grid_for_configs([winner_cfg])
 
     if args.baseline_only:
         run_grid_for_configs([baseline_cfg])
-    elif args.random_search_only:
-        run_grid_for_configs(
-            sampled_cfgs,
-            resume_from_results_csv=random_search_resume_from_csv,
-        )
-    elif args.bayesian_search_only:
-        run_bayesian_trials()
-    elif args.reinflow_rl_only:
-        run_reinflow_phase()
+    elif args.hyperband_only:
+        run_hyperband_phase()
     else:
         run_grid_for_configs([baseline_cfg])
-        if eff_search == "bayesian":
-            run_bayesian_trials()
-        elif eff_search == "reinflow":
-            run_reinflow_phase()
-        else:
-            run_grid_for_configs(
-                sampled_cfgs,
-                resume_from_results_csv=random_search_resume_from_csv,
-            )
+        run_hyperband_phase()
 
     summarize_script = SCRIPT_DIR / "summarize.py"
     plot_script = SCRIPT_DIR / "plot_results.py"
