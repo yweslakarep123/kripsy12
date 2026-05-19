@@ -1,0 +1,165 @@
+# Hydra config: PPO fine-tuning FlowPolicy di Franka Kitchen via ReinFlow.
+#
+# Catatan:
+# - Encoder + normalizer di-FREEZE dan dipanggil di env wrapper, sehingga obs di buffer
+#   sudah flat feature `obs_dim=128` per frame (n_obs_steps=2).
+# - K=1 inference step (sesuai pretraining ConsistencyFM); noise injection state-conditioned
+#   memberikan eksplorasi sambil mempertahankan kompatibilitas Rectified Flow Euler murni.
+
+defaults:
+  - _self_
+hydra:
+  run:
+    dir: ${logdir}
+
+_target_: finetune_flowpolicy.train.train_ppo_flowpolicy_agent.TrainPPOFlowPolicyAgent
+
+# -------------------- dimensi & meta --------------------
+env_name: franka_kitchen_complete4
+action_dim: 9            # mengikuti pretrained checkpoint
+horizon_steps: 8         # FlowPolicy.horizon
+act_steps: 4             # n_action_steps yang dieksekusi env per panggilan policy
+obs_dim: 128             # output FlowPolicyEncoder per frame (pc 64 + state_mlp 64)
+cond_steps: 2            # n_obs_steps di pretrained
+denoising_steps: 1       # K=1 Euler step
+ft_denoising_steps: 1
+min_std: 0.06
+max_std: 0.22
+
+# -------------------- path & device --------------------
+base_policy_path: outputs/baseline_seed101_standard/checkpoints/latest-001.ckpt
+resume_path: null
+seed: 101
+device: cuda:0
+sim_device: cuda:0
+
+name: ${env_name}_ppo_flowpolicy_ta${horizon_steps}_td${denoising_steps}_seed${seed}
+logdir: outputs/ft_ppo_flowpolicy/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}
+
+# -------------------- env --------------------
+env:
+  name: ${env_name}
+  env_type: franka_kitchen_pc          # marker untuk monkey-patched make_async
+  n_envs: 8
+  max_episode_steps: 280
+  reset_at_iteration: false
+  save_video: false
+  use_image_obs: false
+  render: false
+  best_reward_threshold_for_success: 4.0   # 4 task completion = sukses Kitchen-Complete
+  asynchronous: false                  # MuJoCo + encoder lebih stabil sync. Naikkan ke true bila perlu.
+  encoder_device: cpu
+  num_points: 512
+  use_point_crop: true
+  terminate_on_tasks_completed: true
+  tasks_to_complete: [microwave, kettle, slide cabinet, light switch]
+  task_completion_order: null
+  wrappers: null
+
+# -------------------- wandb --------------------
+wandb: null
+# Aktifkan dengan format berikut bila perlu:
+# wandb:
+#   entity: ${oc.env:REINFLOW_WANDB_ENTITY,null}
+#   project: flowpolicy-ppo-finetune
+#   run: ${now:%Y-%m-%d}_${now:%H-%M-%S}_${name}
+#   offline_mode: true
+
+# -------------------- training --------------------
+train:
+  n_train_itr: 200
+  n_critic_warmup_itr: 5
+  n_steps: 70
+  gamma: 0.99
+  gae_lambda: 0.95
+  reward_scale_running: true
+  reward_scale_const: 1.0
+  batch_size: 560               # = n_steps * n_envs ; satu batch per epoch
+  update_epochs: 5
+  vf_coef: 0.5
+  ent_coef: 0.01
+  target_kl: 0.01
+  lr_schedule: fixed
+  repeat_samples: false
+  verbose: false
+  clip_intermediate_actions: true
+  account_for_initial_stochasticity: true
+  use_bc_loss: true             # regularisasi W2 ke pretrained
+  bc_loss_type: W2
+  bc_loss_coeff: 0.05
+  max_noise_hold_ratio: 0.35
+  max_noise_decay_ratio: 0.6
+  max_grad_norm: 1.0
+  save_model_freq: 25
+  val_freq: 10
+  log_freq: 1
+  render:
+    freq: 50
+    num: 0
+  actor_lr: 3.0e-05
+  actor_weight_decay: 0
+  actor_lr_scheduler:
+    type: cosine
+    first_cycle_steps: 100
+    warmup_steps: 5
+    min_lr: 1.0e-05
+  critic_lr: 5.0e-04
+  critic_weight_decay: 1.0e-05
+  critic_lr_scheduler:
+    type: cosine
+    first_cycle_steps: 100
+    warmup_steps: 5
+    min_lr: 2.0e-04
+
+# -------------------- model --------------------
+model:
+  _target_: finetune_flowpolicy.model.ppo_flowpolicy.PPOFlowAdapter
+  device: ${device}
+  policy:
+    _target_: finetune_flowpolicy.adapters.flowpolicy_velocity_adapter.FlowPolicyVelocityAdapter
+    action_dim: ${action_dim}
+    horizon_steps: ${horizon_steps}
+    cond_steps: ${cond_steps}
+    obs_feature_dim: ${obs_dim}
+    diffusion_step_embed_dim: 128
+    down_dims: [512, 1024, 2048]
+    kernel_size: 5
+    n_groups: 8
+    condition_type: film
+    use_down_condition: true
+    use_mid_condition: true
+    use_up_condition: true
+  critic:
+    _target_: model.common.critic.CriticObs
+    cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
+    mlp_dims: [256, 256, 256]
+    activation_type: Mish
+    residual_style: true
+  actor_policy_path: ${base_policy_path}
+  act_dim: ${action_dim}
+  horizon_steps: ${horizon_steps}
+  act_min: -1
+  act_max: 1
+  obs_dim: ${obs_dim}
+  cond_steps: ${cond_steps}
+  noise_scheduler_type: learn_decay
+  inference_steps: ${denoising_steps}
+  ft_denoising_steps: ${ft_denoising_steps}
+  randn_clip_value: 3
+  min_sampling_denoising_std: ${min_std}
+  min_logprob_denoising_std: ${min_std}
+  max_logprob_denoising_std: ${max_std}
+  logprob_min: -2.0
+  logprob_max: 2.0
+  clip_ploss_coef: 0.05
+  clip_ploss_coef_base: 0.05
+  clip_ploss_coef_rate: 3
+  clip_vloss_coef: null
+  denoised_clip_value: 1.0
+  time_dim_explore: 0
+  learn_explore_time_embedding: false
+  use_time_independent_noise: false
+  noise_hidden_dims: [64, 64]
+  logprob_debug_sample: false
+  logprob_debug_recalculate: false
+  explore_net_activation_type: Tanh

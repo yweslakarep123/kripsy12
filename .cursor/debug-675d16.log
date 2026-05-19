@@ -25,3 +25,14 @@
 {"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_enter", "message": "NativeMuJoCoPointCloudGenerator.close enter", "data": {"n_renderers": 2}, "timestamp": 1779079784782, "hypothesisId": "H1,H3"}
 {"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:__del__", "message": "NativeMuJoCoPointCloudGenerator.__del__", "data": {"n_renderers": 2}, "timestamp": 1779079795323, "hypothesisId": "H1,H2,H3"}
 {"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_enter", "message": "NativeMuJoCoPointCloudGenerator.close enter", "data": {"n_renderers": 2}, "timestamp": 1779079795324, "hypothesisId": "H1,H3"}
+{"sessionId": "675d16", "location": "franka_kitchen_env.py:close_enter", "message": "FrankaKitchenPointCloudEnv.close enter", "data": {}, "timestamp": 1779183845534, "hypothesisId": "H1,H5"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_enter", "message": "NativeMuJoCoPointCloudGenerator.close enter", "data": {"n_renderers": 2}, "timestamp": 1779183845534, "hypothesisId": "H1,H3"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_exit", "message": "NativeMuJoCoPointCloudGenerator.close done", "data": {}, "timestamp": 1779183845560, "hypothesisId": "H3"}
+{"sessionId": "675d16", "location": "franka_kitchen_env.py:close_enter", "message": "FrankaKitchenPointCloudEnv.close enter", "data": {}, "timestamp": 1779184611966, "hypothesisId": "H1,H5"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_enter", "message": "NativeMuJoCoPointCloudGenerator.close enter", "data": {"n_renderers": 2}, "timestamp": 1779184611966, "hypothesisId": "H1,H3"}
+{"sessionId": "675d16", "location": "franka_kitchen_env.py:close_enter", "message": "FrankaKitchenPointCloudEnv.close enter", "data": {}, "timestamp": 1779184611966, "hypothesisId": "H1,H5"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_enter", "message": "NativeMuJoCoPointCloudGenerator.close enter", "data": {"n_renderers": 2}, "timestamp": 1779184611966, "hypothesisId": "H1,H3"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:__del__", "message": "NativeMuJoCoPointCloudGenerator.__del__", "data": {"n_renderers": 2}, "timestamp": 1779184611966, "hypothesisId": "H1,H2,H3"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_enter", "message": "NativeMuJoCoPointCloudGenerator.close enter", "data": {"n_renderers": 2}, "timestamp": 1779184611966, "hypothesisId": "H1,H3"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:__del__", "message": "NativeMuJoCoPointCloudGenerator.__del__", "data": {"n_renderers": 2}, "timestamp": 1779184612042, "hypothesisId": "H1,H2,H3"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_enter", "message": "NativeMuJoCoPointCloudGenerator.close enter", "data": {"n_renderers": 2}, "timestamp": 1779184612042, "hypothesisId": "H1,H3"}
