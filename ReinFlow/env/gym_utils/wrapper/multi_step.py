@@ -69,10 +69,66 @@ def take_last_n(x, n):
     return np.array(x[-n:])
 
 
+# #region agent log
+def _dbg_log_dda072(payload):
+    try:
+        import json as _json, time as _time, os as _os
+        payload = dict(payload)
+        payload.setdefault("sessionId", "dda072")
+        payload.setdefault("timestamp", int(_time.time() * 1000))
+        path = "/home/daffa/Documents/kripsy12/.cursor/debug-dda072.log"
+        _os.makedirs(_os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as _f:
+            _f.write(_json.dumps(payload, default=str) + "\n")
+    except Exception:
+        pass
+# #endregion
+
+
 def dict_take_last_n(x, n):
     result = dict()
     for key, value in x.items():
-        result[key] = take_last_n(value, n)
+        # #region agent log
+        try:
+            result[key] = take_last_n(value, n)
+        except Exception as _e:
+            _vals = list(value)
+            _slice = _vals[-min(len(_vals), n):]
+            _desc = []
+            for _v in _slice:
+                _t = type(_v).__name__
+                _shape = getattr(_v, "shape", None)
+                _len = None
+                try:
+                    _len = len(_v) if hasattr(_v, "__len__") else None
+                except Exception:
+                    _len = None
+                _sample = None
+                try:
+                    if isinstance(_v, (list, tuple)):
+                        _sample = [type(_e).__name__ for _e in list(_v)[:4]]
+                    elif _shape is not None:
+                        _sample = f"shape={_shape},dtype={getattr(_v,'dtype',None)}"
+                    else:
+                        _sample = str(_v)[:80]
+                except Exception:
+                    _sample = None
+                _desc.append({"type": _t, "shape": str(_shape), "len": _len, "sample": _sample})
+            _dbg_log_dda072({
+                "location": "multi_step.py:dict_take_last_n",
+                "message": "FAIL np.array stack for info key",
+                "hypothesisId": "H1,H2,H3,H4,H5",
+                "data": {
+                    "key": str(key),
+                    "all_keys": list(x.keys()),
+                    "n_request": n,
+                    "deque_len": len(_vals),
+                    "slice_descriptors": _desc,
+                    "error": str(_e),
+                },
+            })
+            raise
+        # #endregion
     return result
 
 
@@ -239,6 +295,41 @@ class MultiStep(gym.Wrapper):
     def _add_info(self, info):
         for key, value in info.items():
             self.info[key].append(value)
+        # #region agent log
+        try:
+            self._dbg_dda072_calls = getattr(self, "_dbg_dda072_calls", 0) + 1
+            if self._dbg_dda072_calls <= 4:
+                _desc = {}
+                for k, v in info.items():
+                    _shape = getattr(v, "shape", None)
+                    _len = None
+                    try:
+                        _len = len(v) if hasattr(v, "__len__") else None
+                    except Exception:
+                        _len = None
+                    _desc[str(k)] = {
+                        "type": type(v).__name__,
+                        "shape": str(_shape),
+                        "len": _len,
+                        "preview": (
+                            [type(e).__name__ for e in list(v)[:3]]
+                            if isinstance(v, (list, tuple))
+                            else str(v)[:60]
+                        ),
+                    }
+                _dbg_log_dda072({
+                    "location": "multi_step.py:_add_info",
+                    "message": "incoming info snapshot",
+                    "hypothesisId": "H1,H2,H3,H4,H5",
+                    "data": {
+                        "call_idx": self._dbg_dda072_calls,
+                        "keys": list(info.keys()),
+                        "desc": _desc,
+                    },
+                })
+        except Exception:
+            pass
+        # #endregion
 
     def render(self, **kwargs):
         """Not the best design"""
