@@ -3,8 +3,8 @@
 # Tanpa baseline.
 #
 # Default: R=3000 (= baseline num_epochs), eta=3 (sesuai paper).
-# Hyperband berjalan di 1 seed × 1 profile (default seed=0, profile=standard);
-# pemenang top-1 di-rerun di --seeds × --profiles (default 3 × 2 = 6 run).
+# Hyperband mengevaluasi tiap trial di --seeds × --profiles (default 3×2);
+# pemenang top-1 di-rerun train+infer di kombinasi yang sama (6 run).
 #
 # Anggaran waktu (perkiraan; lihat README untuk detail):
 #   --hyperband-s-min 0 (default): SEMUA bracket s=s_max..0  → paling robust,
@@ -27,7 +27,5 @@ exec python3 scripts/run_experiment.py \
   --hyperband-eta 3 \
   --hyperband-s-min 0 \
   --hyperband-seed 99 \
-  --hyperband-search-train-seed 0 \
-  --hyperband-search-profile standard \
   --cv-seed 12345 \
   "$@"

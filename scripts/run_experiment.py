@@ -5,12 +5,12 @@ Orkestrator eksperimen (tanpa k-fold, satu partisi train/val/test):
   1) Baseline — hyperparameter default × len(seeds) × len(profiles)
   2) Pencarian — **Hyperband** (Li et al., 2018, https://arxiv.org/pdf/1603.06560).
 
-Hyperband berjalan pada **satu seed × satu profile** (default: seed=0,
-profile=standard) menggunakan ``val_loss`` sebagai sinyal early-stopping
-antar-rung. Setelah Hyperband selesai, konfigurasi pemenang (val_loss
-terkecil seenough across all evaluations sesuai paper) di-**rerun penuh**
-pada semua ``seeds × profiles`` user (default 3 × 2 = 6 run) dengan training
-+ inference + write ``results.csv`` ``status=ok`` — analog baseline.
+Hyperband mengevaluasi setiap trial pada **semua** ``--seeds × --profiles``
+(default 3 seed × 2 profil: ``standard`` = data ter-augmentasi,
+``minimal`` = tanpa augmentasi). Sinyal antar-rung = rata-rata
+``val_loss`` lintas split tersebut. Setelah Hyperband selesai, pemenang
+di-**rerun penuh** (train + inferensi) pada ``seeds × profiles`` yang sama
+dengan ``results.csv`` ``status=ok`` — analog baseline.
 
 Flag mutually exclusive:
 
@@ -61,7 +61,10 @@ from experiment_constants import (  # noqa: E402
     BASELINE_CFG_IDX,
     CSV_HPARAM_KEYS,
     HYPERBAND_BEST_CFG_IDX,
+    HYPERBAND_SAMPLING_BASELINE_ANCHORED,
+    HYPERBAND_SAMPLING_RANDOM,
     RESULTS_CSV_METRIC_COLUMNS,
+    append_kitchen_policy_hparam_overrides,
     baseline_config_dict,
     compute_horizon,
     empty_metrics_row,
@@ -171,13 +174,7 @@ def build_train_overrides(
         f"val_dataloader.num_workers={dataloader_num_workers}",
     ]
 
-    for k in CSV_HPARAM_KEYS:
-        if k == "cfg_idx":
-            continue
-        if k == "_state_mlp_hidden":
-            odl.append(f"policy.encoder_output_dim={_fmt_hydra_val(cfg[k])}")
-            continue
-        odl.append(f"{k}={_fmt_hydra_val(cfg[k])}")
+    append_kitchen_policy_hparam_overrides(odl, cfg)
     return odl
 
 
@@ -689,16 +686,20 @@ def main():
         help="Seed RNG sampling konfigurasi Hyperband (reproducible).",
     )
     ap.add_argument(
-        "--hyperband-search-train-seed",
+        "--hyperband-iterations",
         type=int,
-        default=0,
-        help="Seed training yang dipakai SELAMA fase Hyperband (1 seed saja agar cepat).",
+        default=1,
+        metavar="I",
+        help="KerasTuner hyperband_iterations: berapa kali mengulang seluruh algoritme "
+        "Hyperband (default 1).",
     )
     ap.add_argument(
-        "--hyperband-search-profile",
+        "--hyperband-sampling",
         type=str,
-        default="standard",
-        help="Profil preprocessing yang dipakai SELAMA fase Hyperband (1 profil saja).",
+        default=HYPERBAND_SAMPLING_BASELINE_ANCHORED,
+        choices=[HYPERBAND_SAMPLING_BASELINE_ANCHORED, HYPERBAND_SAMPLING_RANDOM],
+        help="baseline_anchored: warm-start + tweak lokal dari baseline terbukti "
+        "(default). random: cold start uniform di SEARCH_SPACE.",
     )
     ap.add_argument(
         "--n-train-val-episodes",
@@ -770,6 +771,8 @@ def main():
             "hyperband_s_max": (
                 None if args.hyperband_s_max is None else int(args.hyperband_s_max)
             ),
+            "hyperband_iterations": int(args.hyperband_iterations),
+            "hyperband_sampling": str(args.hyperband_sampling),
         },
     )
 
@@ -792,23 +795,25 @@ def main():
         )
     elif args.hyperband_only:
         print(
-            "\n>>> Mode --hyperband-only: Hyperband (1 seed × 1 profile) "
-            f"diikuti rerun top-1 pemenang di {n_final} run "
-            f"({len(args.seeds)} seeds × {len(args.profiles)} profiles).\n"
+            f"\n>>> Mode --hyperband-only: Hyperband ({len(args.seeds)} seeds × "
+            f"{len(args.profiles)} profiles per trial) lalu rerun top-1 pemenang "
+            f"di {n_final} run (train+infer).\n"
             "    Baseline dilewati.\n"
             f"    R={args.hyperband_max_epochs}, eta={args.hyperband_eta}, "
-            f"s_min={args.hyperband_s_min}, s_max={args.hyperband_s_max}\n"
+            f"s_min={args.hyperband_s_min}, s_max={args.hyperband_s_max}, "
+            f"iterations={args.hyperband_iterations}\n"
             f"    VRAM: max_batch_size={args.max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
         )
     else:
         print(
             "\n>>> Urutan: (1) Baseline "
-            f"({n_base} run) → (2) Hyperband (1 seed × 1 profile) "
-            f"→ (3) rerun top-1 pemenang ({n_final} run). "
+            f"({n_base} run) → (2) Hyperband ({len(args.seeds)}×{len(args.profiles)} "
+            f"per trial) → (3) rerun top-1 pemenang ({n_final} run). "
             "Satu partisi train/val, tanpa k-fold.\n"
             f"    Hyperband: R={args.hyperband_max_epochs}, eta={args.hyperband_eta}, "
-            f"s_min={args.hyperband_s_min}, s_max={args.hyperband_s_max}\n"
+            f"s_min={args.hyperband_s_min}, s_max={args.hyperband_s_max}, "
+            f"iterations={args.hyperband_iterations}\n"
             f"    VRAM: max_batch_size={args.max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
         )
@@ -852,9 +857,8 @@ def main():
                     )
 
     def run_hyperband_phase() -> None:
-        """Jalankan Hyperband (single seed × single profile), lalu rerun top-1
-        pemenang pada full ``seeds × profiles`` dengan pipeline train + infer
-        (cfg_idx=``HYPERBAND_BEST_CFG_IDX``)."""
+        """Jalankan Hyperband (``seeds × profiles`` per trial), lalu rerun top-1
+        pemenang dengan pipeline train + infer (cfg_idx=``HYPERBAND_BEST_CFG_IDX``)."""
         best = run_hyperband(
             out_root=out_root,
             runs_root=runs_root,
@@ -862,9 +866,11 @@ def main():
             eta=int(args.hyperband_eta),
             s_min=int(args.hyperband_s_min),
             s_max=(None if args.hyperband_s_max is None else int(args.hyperband_s_max)),
+            hyperband_iterations=int(args.hyperband_iterations),
+            sampling=str(args.hyperband_sampling),
             sampling_seed=int(args.hyperband_seed),
-            search_train_seed=int(args.hyperband_search_train_seed),
-            search_profile=str(args.hyperband_search_profile),
+            search_seeds=[int(s) for s in args.seeds],
+            search_profiles=[str(p) for p in args.profiles],
             train_eps=fold_entry["train_episodes"],
             val_eps=fold_entry["val_episodes"],
             zarr_rel=args.zarr_path,

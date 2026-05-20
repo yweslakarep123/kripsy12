@@ -16,7 +16,5 @@ exec python3 scripts/run_experiment.py \
   --hyperband-eta 3 \
   --hyperband-s-min 0 \
   --hyperband-seed 99 \
-  --hyperband-search-train-seed 0 \
-  --hyperband-search-profile standard \
   --cv-seed 12345 \
   "$@"

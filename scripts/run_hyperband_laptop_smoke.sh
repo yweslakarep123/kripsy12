@@ -45,8 +45,6 @@ exec python scripts/run_experiment.py \
   --hyperband-s-max 1 \
   --hyperband-s-min 1 \
   --hyperband-seed 7 \
-  --hyperband-search-train-seed 0 \
-  --hyperband-search-profile standard \
   --n-infer-episodes 2 \
   --n-train-val-episodes 0 \
   --max-batch-size 16 \

@@ -15,6 +15,36 @@ from typing import Any, Dict, List
 
 import numpy as np
 
+
+def fmt_hydra_val(v: Any) -> str:
+    if isinstance(v, bool):
+        return str(v).lower()
+    if isinstance(v, float):
+        return repr(float(v))
+    return str(v)
+
+
+def append_kitchen_policy_hparam_overrides(
+    odl: List[str],
+    cfg: Dict[str, Any],
+) -> None:
+    """Override Hydra untuk Franka Kitchen: state encoder + ruang ``SEARCH_SPACE``.
+
+    Selalu memaksa ``obs_encoder_type=state`` (59-dim, tanpa PointNet) seperti
+    ``franka_kitchen_complete4``. ``_state_mlp_hidden`` → ``encoder_output_dim``;
+    hidden MLP state encoder mengikuti ``state_encoder_cfg`` task (default [256,256]).
+    """
+    odl.append("policy.obs_encoder_type=state")
+    odl.append("task.env_runner.obs_mode=state")
+    for k in CSV_HPARAM_KEYS:
+        if k in ("cfg_idx", "training.num_epochs"):
+            continue
+        if k == "_state_mlp_hidden":
+            # Ukuran keluaran StateFlowPolicyEncoder; hidden MLP dari task YAML [256,256].
+            odl.append(f"policy.encoder_output_dim={int(cfg[k])}")
+            continue
+        odl.append(f"{k}={fmt_hydra_val(cfg[k])}")
+
 # Selaras dengan `flowpolicy.yaml` + `franka_kitchen_complete4` (FlowPolicy asli).
 DEFAULT_BASELINE_HPARAMS = {
     "training.num_epochs": 3000,
@@ -37,6 +67,8 @@ HYPERBAND_BEST_CFG_IDX = -3
 HYPERBAND_CFG_IDX_BASE = 1000
 
 # Ruang pencarian Hyperband (tanpa ``training.num_epochs`` — itu resource R).
+# Nilai baseline (``DEFAULT_BASELINE_HPARAMS``) harus ada di setiap daftar agar
+# tweak lokal di sekitar konfigurasi terbukti Franka Kitchen bisa dilakukan.
 SEARCH_SPACE = {
     "optimizer.lr": [1e-3, 5e-4, 1e-4, 1e-5],
     "dataloader.batch_size": [64, 128, 256, 512],
@@ -44,10 +76,22 @@ SEARCH_SPACE = {
     "policy.Conditional_ConsistencyFM.eps": [1e-4, 1e-3, 1e-2, 0.5],
     "policy.Conditional_ConsistencyFM.delta": [1e-4, 1e-3, 1e-2, 1.0],
     "n_action_steps": [2, 4, 6, 8],
-    "n_obs_steps": [4, 6, 8, 16],
+    "n_obs_steps": [2, 4, 6, 8, 16],
     "policy.diffusion_step_embed_dim": [128, 256, 512, 1024],
-    "_state_mlp_hidden": [128, 256, 512, 1024],
+    # Ukuran keluaran StateFlowPolicyEncoder (``policy.encoder_output_dim``).
+    "_state_mlp_hidden": [64, 128, 256, 512, 1024],
 }
+
+# Mode sampling Hyperband: ``baseline_anchored`` = warm-start dari baseline terbukti.
+HYPERBAND_SAMPLING_BASELINE_ANCHORED = "baseline_anchored"
+HYPERBAND_SAMPLING_RANDOM = "random"
+
+
+# Alias selaras API KerasTuner Hyperband (https://keras.io/keras_tuner/api/tuners/hyperband/)
+# — dipakai di CLI ``run_experiment.py`` / ``hyperband_search.py``.
+HYPERBAND_DEFAULT_MAX_EPOCHS = 3000  # max_epochs
+HYPERBAND_DEFAULT_FACTOR = 3  # factor (eta)
+HYPERBAND_DEFAULT_ITERATIONS = 1  # hyperband_iterations
 
 # Kolom hiperparameter di CSV (tanpa prefix policy untuk CFM agar rapi).
 # Kolom pertama: ``training.num_epochs`` — nilai aktual epoch yang dilatih
@@ -66,30 +110,126 @@ def baseline_config_dict() -> dict:
     return out
 
 
+def baseline_search_center() -> Dict[str, Any]:
+    """Pusat pencarian = hiperparameter baseline Franka Kitchen (tanpa epoch/cfg_idx)."""
+    return {k: DEFAULT_BASELINE_HPARAMS[k] for k in SEARCH_SPACE.keys()}
+
+
+def _values_equal(a: Any, b: Any) -> bool:
+    if isinstance(a, float) or isinstance(b, float):
+        try:
+            return bool(np.isclose(float(a), float(b), rtol=0.0, atol=1e-12))
+        except (TypeError, ValueError):
+            return False
+    return a == b
+
+
+def _choice_index(choices: List[Any], value: Any) -> int:
+    for i, c in enumerate(choices):
+        if _values_equal(c, value):
+            return i
+    raise ValueError(f"nilai baseline {value!r} tidak ada di pilihan {choices!r}")
+
+
+def _local_neighbor_choice(
+    rng: np.random.RandomState, choices: List[Any], current: Any
+) -> Any:
+    """Pilih nilai tetangga diskrit ±1 dari ``current`` dalam ``choices`` (tweak lokal)."""
+    idx = _choice_index(choices, current)
+    lo = max(0, idx - 1)
+    hi = min(len(choices) - 1, idx + 1)
+    return choices[int(rng.randint(lo, hi + 1))]
+
+
+def _config_from_center(
+    center: Dict[str, Any],
+    *,
+    cfg_idx: int,
+    rng: np.random.RandomState,
+    tweak_dims: int,
+) -> Dict[str, Any]:
+    """Salin ``center`` dan ubah ``tweak_dims`` dimensi ke tetangga lokal di ``SEARCH_SPACE``."""
+    d: Dict[str, Any] = {
+        "cfg_idx": int(cfg_idx),
+        "training.num_epochs": 0,
+        **{k: center[k] for k in SEARCH_SPACE.keys()},
+    }
+    if tweak_dims <= 0:
+        return d
+    keys = list(SEARCH_SPACE.keys())
+    n_tweak = min(int(tweak_dims), len(keys))
+    for k in rng.choice(keys, size=n_tweak, replace=False):
+        d[k] = _local_neighbor_choice(rng, SEARCH_SPACE[k], center[k])
+    return d
+
+
 def sample_configs_hyperband(
     rng: np.random.RandomState,
     n: int,
     *,
     base_cfg_idx: int = HYPERBAND_CFG_IDX_BASE,
+    sampling: str = HYPERBAND_SAMPLING_BASELINE_ANCHORED,
+    max_dims_to_tweak: int = 4,
 ) -> List[Dict[str, Any]]:
-    """Sample ``n`` konfigurasi random dari ``SEARCH_SPACE`` untuk Hyperband.
+    """Sample ``n`` konfigurasi untuk Hyperband.
 
-    ``training.num_epochs`` TIDAK disampling (= resource Hyperband). Field itu
-    diset ke ``0`` di sini lalu di-overwrite menjadi ``r_i`` aktual saat training
-    rung berjalan, dan menjadi ``R`` final saat config menyelesaikan rung terakhir.
-    Cfg_idx unik global mulai dari ``base_cfg_idx``.
+    ``training.num_epochs`` TIDAK disampling (= resource Hyperband).
+
+    **baseline_anchored** (default): warm-start dari ``DEFAULT_BASELINE_HPARAMS``
+    (konfigurasi terbukti di Franka Kitchen, selaras
+    ``flowpolicy_hyperparameter_finetuning.md`` §1–2):
+
+    - Trial pertama di setiap bracket: **baseline persis**
+    - Trial lain: tweak lokal (ubah 1–``max_dims_to_tweak`` dimensi ke nilai
+      tetangga dalam ``SEARCH_SPACE``, bukan cold random di seluruh ruang)
+
+    **random**: uniform cold start (legacy).
     """
+    n = int(n)
+    if n <= 0:
+        return []
+
+    mode = str(sampling).lower()
+    if mode == HYPERBAND_SAMPLING_RANDOM:
+        out: List[Dict[str, Any]] = []
+        keys = list(SEARCH_SPACE.keys())
+        for i in range(n):
+            d = {
+                "cfg_idx": int(base_cfg_idx) + i,
+                "training.num_epochs": 0,
+            }
+            for k in keys:
+                choices = SEARCH_SPACE[k]
+                d[k] = choices[int(rng.randint(0, len(choices)))]
+            out.append(d)
+        return out
+
+    if mode != HYPERBAND_SAMPLING_BASELINE_ANCHORED:
+        raise ValueError(
+            f"sampling tidak dikenal: {sampling!r} "
+            f"(gunakan {HYPERBAND_SAMPLING_BASELINE_ANCHORED!r} atau "
+            f"{HYPERBAND_SAMPLING_RANDOM!r})"
+        )
+
+    center = baseline_search_center()
+    # Pastikan baseline valid terhadap SEARCH_SPACE (fail-fast).
+    for k, v in center.items():
+        _choice_index(SEARCH_SPACE[k], v)
+
     out: List[Dict[str, Any]] = []
-    keys = list(SEARCH_SPACE.keys())
-    for i in range(int(n)):
-        d: Dict[str, Any] = {
-            "cfg_idx": int(base_cfg_idx) + i,
-            "training.num_epochs": 0,
-        }
-        for k in keys:
-            choices = SEARCH_SPACE[k]
-            d[k] = choices[int(rng.randint(0, len(choices)))]
-        out.append(d)
+    for i in range(n):
+        if i == 0:
+            out.append(_config_from_center(center, cfg_idx=base_cfg_idx + i, rng=rng, tweak_dims=0))
+        else:
+            n_dims = int(rng.randint(1, min(max_dims_to_tweak, len(SEARCH_SPACE)) + 1))
+            out.append(
+                _config_from_center(
+                    center,
+                    cfg_idx=base_cfg_idx + i,
+                    rng=rng,
+                    tweak_dims=n_dims,
+                )
+            )
     return out
 
 
