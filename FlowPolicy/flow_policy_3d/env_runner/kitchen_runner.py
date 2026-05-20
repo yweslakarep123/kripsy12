@@ -20,14 +20,27 @@ from termcolor import cprint
 
 
 class KitchenRunner(BaseRunner):
-    """Urutan sub-tugas untuk metrik success_rate_k1…k4 (Kitchen-Complete)."""
+    """Metrik success_rate_k1…k4: prefix tugas selesai (urutan sequential atau multitask legacy)."""
 
-    K_LEVEL_SPECS = (
+    # Multitask Kitchen-Complete (tanpa task_completion_order) — urutan D4RL klasik.
+    K_LEVEL_SPECS_MULTITASK = (
         frozenset({"microwave"}),
         frozenset({"microwave", "light switch"}),
         frozenset({"microwave", "light switch", "kettle"}),
         frozenset({"microwave", "light switch", "kettle", "slide cabinet"}),
     )
+
+    @staticmethod
+    def k_level_specs_from_order(task_completion_order) -> tuple:
+        """k_i = {task[0], …, task[i-1]} selesai berurutan."""
+        if not task_completion_order:
+            return KitchenRunner.K_LEVEL_SPECS_MULTITASK
+        prefix: list = []
+        specs = []
+        for task in task_completion_order:
+            prefix.append(task)
+            specs.append(frozenset(prefix))
+        return tuple(specs)
 
     def __init__(
         self,
@@ -47,12 +60,14 @@ class KitchenRunner(BaseRunner):
         device="cuda",
         use_point_crop=True,
         num_points=512,
+        obs_mode: str = "state",
         tasks_to_complete=None,
         task_completion_order=None,
         terminate_on_tasks_completed=True,
     ):
         super().__init__(output_dir)
         self.task_name = task_name
+        self.k_level_specs = self.k_level_specs_from_order(task_completion_order)
 
         def env_fn():
             return MultiStepWrapper(
@@ -61,6 +76,7 @@ class KitchenRunner(BaseRunner):
                         tasks_to_complete=tasks_to_complete,
                         task_completion_order=task_completion_order,
                         device=device,
+                        obs_mode=obs_mode,
                         use_point_crop=use_point_crop,
                         num_points=num_points,
                         terminate_on_tasks_completed=terminate_on_tasks_completed,
@@ -86,6 +102,16 @@ class KitchenRunner(BaseRunner):
         self.logger_util_test = logger_util.LargestKRecorder(K=3)
         self.logger_util_test10 = logger_util.LargestKRecorder(K=5)
         self._env_closed = False
+
+    @staticmethod
+    def _obs_to_policy_input(obs_dict: dict) -> dict:
+        """Bangun input policy dari dict obs env (hanya key yang ada)."""
+        out = {}
+        if "agent_pos" in obs_dict:
+            out["agent_pos"] = obs_dict["agent_pos"].unsqueeze(0)
+        if "point_cloud" in obs_dict:
+            out["point_cloud"] = obs_dict["point_cloud"].unsqueeze(0)
+        return out
 
     def close(self):
         """Tutup sim + renderer MuJoCo (EGL) agar tidak bergantung pada __del__ saat shutdown."""
@@ -189,10 +215,7 @@ class KitchenRunner(BaseRunner):
         obs_dict = dict_apply(
             np_obs_dict, lambda x: torch.from_numpy(x).to(device=device)
         )
-        obs_dict_input = {
-            "point_cloud": obs_dict["point_cloud"].unsqueeze(0),
-            "agent_pos": obs_dict["agent_pos"].unsqueeze(0),
-        }
+        obs_dict_input = self._obs_to_policy_input(obs_dict)
         for _ in range(max(0, warmup_predict_steps)):
             predict_timed(obs_dict_input)
 
@@ -225,10 +248,7 @@ class KitchenRunner(BaseRunner):
                 obs_dict = dict_apply(
                     np_obs_dict, lambda x: torch.from_numpy(x).to(device=device)
                 )
-                obs_dict_input = {
-                    "point_cloud": obs_dict["point_cloud"].unsqueeze(0),
-                    "agent_pos": obs_dict["agent_pos"].unsqueeze(0),
-                }
+                obs_dict_input = self._obs_to_policy_input(obs_dict)
                 action_dict = predict_timed(obs_dict_input)
                 np_action_dict = dict_apply(
                     action_dict, lambda x: x.detach().to("cpu").numpy()
@@ -240,7 +260,7 @@ class KitchenRunner(BaseRunner):
                 last_completions |= self._completion_set_from_info(info)
 
             levels_met = [
-                spec.issubset(last_completions) for spec in self.K_LEVEL_SPECS
+                spec.issubset(last_completions) for spec in self.k_level_specs
             ]
             ep_success_levels.append(levels_met)
 
@@ -346,9 +366,7 @@ class KitchenRunner(BaseRunner):
                 )
 
                 with torch.no_grad():
-                    obs_dict_input = {}
-                    obs_dict_input["point_cloud"] = obs_dict["point_cloud"].unsqueeze(0)
-                    obs_dict_input["agent_pos"] = obs_dict["agent_pos"].unsqueeze(0)
+                    obs_dict_input = self._obs_to_policy_input(obs_dict)
                     start_time = time.time()
                     action_dict = policy.predict_action(obs_dict_input)
                     end_time = time.time()

@@ -5,14 +5,18 @@ task_name: ${name}
 
 shape_meta: &shape_meta
   obs:
-    point_cloud:
-      shape: [512, 3]
-      type: point_cloud
     agent_pos:
-      shape: [9]
+      shape: [59]
       type: low_dim
   action:
     shape: [9]
+
+policy:
+  obs_encoder_type: state
+  encoder_output_dim: 64
+  state_encoder_cfg:
+    mlp_hidden_dims: [256, 256]
+    use_layernorm: false
 
 env_runner:
   _target_: flow_policy_3d.env_runner.kitchen_runner.KitchenRunner
@@ -25,7 +29,7 @@ env_runner:
   n_test: null
   task_name: ${task_name}
   device: ${training.device}
-  use_point_crop: ${policy.use_point_crop}
+  obs_mode: state
   max_steps: 280
   tasks_to_complete: null
   task_completion_order:

@@ -25,23 +25,25 @@ from finetune_flowpolicy.utils.ckpt_io import (
 )
 from flow_policy_3d.env.franka_kitchen.franka_kitchen_env import FrankaKitchenPointCloudEnv
 from flow_policy_3d.model.common.normalizer import LinearNormalizer
-from flow_policy_3d.model.vision.pointnet_extractor import FlowPolicyEncoder
+from flow_policy_3d.model.vision.pointnet_extractor import build_obs_encoder
 
 
-def _build_encoder_from_cfg(policy_cfg: Any) -> FlowPolicyEncoder:
-    """Re-instansiasi FlowPolicyEncoder dari cfg.policy yang tersimpan di checkpoint."""
+def _build_encoder_from_cfg(policy_cfg: Any):
+    """Re-instansiasi obs encoder dari cfg.policy yang tersimpan di checkpoint."""
     shape_meta = policy_cfg["shape_meta"]
     obs_meta = shape_meta["obs"]
     obs_space = {k: v["shape"] for k, v in obs_meta.items()}
-    pc_cfg = copy.deepcopy(policy_cfg["pointcloud_encoder_cfg"])
-    # `pointcloud_encoder_cfg.in_channels` di-overwrite di FlowPolicyEncoder.__init__
-    enc = FlowPolicyEncoder(
+    encoder_type = str(policy_cfg.get("obs_encoder_type", "pointnet"))
+    pc_cfg = copy.deepcopy(policy_cfg.get("pointcloud_encoder_cfg") or {})
+    enc = build_obs_encoder(
         observation_space=obs_space,
+        encoder_type=encoder_type,
         img_crop_shape=tuple(policy_cfg.get("crop_shape", (84, 84))),
         out_channel=int(policy_cfg["encoder_output_dim"]),
         pointcloud_encoder_cfg=pc_cfg,
         use_pc_color=bool(policy_cfg.get("use_pc_color", False)),
         pointnet_type=str(policy_cfg.get("pointnet_type", "mlp")),
+        state_encoder_cfg=policy_cfg.get("state_encoder_cfg"),
     )
     return enc
 
@@ -80,7 +82,10 @@ def build_encoder_and_normalizer(
         p.requires_grad_(False)
 
     obs_feature_dim = int(enc.output_shape())
-    return enc, normalizer, obs_feature_dim, cfg, bool(cfg["policy"].get("use_pc_color", False))
+    use_pc_color = bool(cfg["policy"].get("use_pc_color", False))
+    if str(cfg["policy"].get("obs_encoder_type", "pointnet")) == "state":
+        use_pc_color = False
+    return enc, normalizer, obs_feature_dim, cfg, use_pc_color
 
 
 def make_franka_kitchen_vec_env(
@@ -118,8 +123,13 @@ def make_franka_kitchen_vec_env(
     encoder_cpu = encoder.cpu().eval()
     normalizer_cpu = normalizer.cpu()
 
-    if tasks_to_complete is None:
-        tasks_to_complete = ["microwave", "kettle", "slide cabinet", "light switch"]
+    if tasks_to_complete is None and task_completion_order is None:
+        task_completion_order = [
+            "microwave",
+            "kettle",
+            "light switch",
+            "slide cabinet",
+        ]
 
     def env_fn(rank: int):
         # closure variables harus picklable; deepcopy encoder/normalizer untuk tiap worker
@@ -128,10 +138,17 @@ def make_franka_kitchen_vec_env(
         local_pc_color = use_pc_color
 
         def _fn():
+            obs_mode = "state"
+            try:
+                if str(cfg.get("policy", {}).get("obs_encoder_type", "state")) == "pointnet":
+                    obs_mode = "point_cloud"
+            except Exception:
+                pass
             base_env = FrankaKitchenPointCloudEnv(
                 tasks_to_complete=tasks_to_complete,
                 task_completion_order=task_completion_order,
                 device="cpu",
+                obs_mode=obs_mode,
                 use_point_crop=use_point_crop,
                 num_points=num_points,
                 terminate_on_tasks_completed=terminate_on_tasks_completed,

@@ -201,6 +201,140 @@ class PointNetEncoderXYZ(nn.Module):
     
 
 
+class StateFlowPolicyEncoder(nn.Module):
+    """Encoder observasi state-only (tanpa point cloud) untuk lingkungan state-based."""
+
+    def __init__(
+        self,
+        observation_space: Dict,
+        out_channel: int = 256,
+        state_mlp_size=(256, 256),
+        state_mlp_activation_fn=nn.ReLU,
+        use_layernorm: bool = False,
+        **kwargs,
+    ):
+        super().__init__()
+        self.state_key = "agent_pos"
+        if self.state_key not in observation_space:
+            raise KeyError(
+                f"StateFlowPolicyEncoder membutuhkan key {self.state_key!r} di observation_space"
+            )
+        self.state_shape = observation_space[self.state_key]
+        state_dim = int(self.state_shape[0])
+
+        if len(state_mlp_size) == 0:
+            raise RuntimeError("state_mlp_size tidak boleh kosong")
+        elif len(state_mlp_size) == 1:
+            net_arch = []
+            output_dim = int(state_mlp_size[0])
+        else:
+            net_arch = list(state_mlp_size[:-1])
+            output_dim = int(state_mlp_size[-1])
+
+        if int(out_channel) != output_dim:
+            output_dim = int(out_channel)
+
+        layers = create_mlp(
+            state_dim, output_dim, net_arch, state_mlp_activation_fn
+        )
+        if use_layernorm and len(layers) > 0:
+            # Sisipkan LayerNorm setelah setiap Linear (sebelum ReLU berikutnya).
+            wrapped = []
+            for mod in layers:
+                wrapped.append(mod)
+                if isinstance(mod, nn.Linear):
+                    wrapped.append(nn.LayerNorm(mod.out_features))
+            layers = wrapped
+
+        self.state_mlp = nn.Sequential(*layers)
+        self.n_output_channels = output_dim
+        cprint(
+            f"[StateFlowPolicyEncoder] state dim={state_dim} -> out={self.n_output_channels}",
+            "yellow",
+        )
+
+    def forward(self, observations: Dict) -> torch.Tensor:
+        state = observations[self.state_key]
+        assert state.ndim == 2, cprint(
+            f"state shape harus (B, D), dapat {state.shape}", "red"
+        )
+        return self.state_mlp(state)
+
+    def output_shape(self):
+        return self.n_output_channels
+
+
+def build_obs_encoder(
+    observation_space: Dict,
+    *,
+    encoder_type: str = "pointnet",
+    img_crop_shape=None,
+    out_channel=256,
+    state_mlp_size=(64, 64),
+    state_mlp_activation_fn=nn.ReLU,
+    pointcloud_encoder_cfg=None,
+    use_pc_color=False,
+    pointnet_type="mlp",
+    state_encoder_cfg=None,
+):
+    """Factory encoder observasi: ``pointnet`` (default) atau ``state``."""
+    encoder_type = str(encoder_type).lower()
+    # #region agent log
+    try:
+        import json as _json
+        import time as _time
+        from pathlib import Path as _Path
+        _lp = _Path(__file__).resolve().parents[4] / ".cursor" / "debug-f725e3.log"
+        _lp.parent.mkdir(parents=True, exist_ok=True)
+        with open(_lp, "a", encoding="utf-8") as _lf:
+            _lf.write(
+                _json.dumps(
+                    {
+                        "sessionId": "f725e3",
+                        "hypothesisId": "A",
+                        "location": "pointnet_extractor.py:build_obs_encoder",
+                        "message": "encoder branch",
+                        "data": {
+                            "encoder_type": encoder_type,
+                            "obs_keys": list(observation_space.keys()),
+                        },
+                        "timestamp": int(_time.time() * 1000),
+                        "runId": "init",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
+    if encoder_type == "state":
+        cfg = dict(state_encoder_cfg or {})
+        mlp_hidden = cfg.get("mlp_hidden_dims", None)
+        if mlp_hidden is not None:
+            hidden = list(mlp_hidden)
+            state_mlp_size = tuple(hidden + [int(out_channel)])
+        return StateFlowPolicyEncoder(
+            observation_space=observation_space,
+            out_channel=int(out_channel),
+            state_mlp_size=state_mlp_size,
+            state_mlp_activation_fn=state_mlp_activation_fn,
+            use_layernorm=bool(cfg.get("use_layernorm", False)),
+        )
+    if encoder_type == "pointnet":
+        return FlowPolicyEncoder(
+            observation_space=observation_space,
+            img_crop_shape=img_crop_shape,
+            out_channel=out_channel,
+            state_mlp_size=state_mlp_size,
+            state_mlp_activation_fn=state_mlp_activation_fn,
+            pointcloud_encoder_cfg=pointcloud_encoder_cfg,
+            use_pc_color=use_pc_color,
+            pointnet_type=pointnet_type,
+        )
+    raise NotImplementedError(f"encoder_type: {encoder_type}")
+
+
 class FlowPolicyEncoder(nn.Module):
     def __init__(self, 
                  observation_space: Dict, 

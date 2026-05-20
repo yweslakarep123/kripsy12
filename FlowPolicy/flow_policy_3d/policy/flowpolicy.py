@@ -16,7 +16,7 @@ from flow_policy_3d.model.flow.conditional_unet1d import ConditionalUnet1D
 from flow_policy_3d.model.flow.mask_generator import LowdimMaskGenerator
 from flow_policy_3d.common.pytorch_util import dict_apply
 from flow_policy_3d.common.model_util import print_params
-from flow_policy_3d.model.vision.pointnet_extractor import FlowPolicyEncoder
+from flow_policy_3d.model.vision.pointnet_extractor import build_obs_encoder
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -40,6 +40,8 @@ class FlowPolicy(BasePolicy):
             use_pc_color=False,
             pointnet_type="mlp",
             pointcloud_encoder_cfg=None,
+            obs_encoder_type="pointnet",
+            state_encoder_cfg=None,
             Conditional_ConsistencyFM=None,           
             eta=0.01,
             **kwargs):
@@ -61,14 +63,46 @@ class FlowPolicy(BasePolicy):
         obs_shape_meta = shape_meta['obs']
         obs_dict = dict_apply(obs_shape_meta, lambda x: x['shape'])
         
-        # point cloud encoder
-        obs_encoder = FlowPolicyEncoder(observation_space=obs_dict,
-                                                   img_crop_shape=crop_shape,
-                                                out_channel=encoder_output_dim,
-                                                pointcloud_encoder_cfg=pointcloud_encoder_cfg,
-                                                use_pc_color=use_pc_color,
-                                                pointnet_type=pointnet_type,
-                                                )
+        self.obs_encoder_type = str(obs_encoder_type).lower()
+        # #region agent log
+        try:
+            import json as _json
+            import time as _time
+            from pathlib import Path as _Path
+            _lp = _Path(__file__).resolve().parents[3] / ".cursor" / "debug-f725e3.log"
+            _lp.parent.mkdir(parents=True, exist_ok=True)
+            with open(_lp, "a", encoding="utf-8") as _lf:
+                _lf.write(
+                    _json.dumps(
+                        {
+                            "sessionId": "f725e3",
+                            "hypothesisId": "A",
+                            "location": "flowpolicy.py:__init__",
+                            "message": "obs_encoder before build_obs_encoder",
+                            "data": {
+                                "obs_encoder_type": self.obs_encoder_type,
+                                "obs_keys": list(obs_dict.keys()),
+                            },
+                            "timestamp": int(_time.time() * 1000),
+                            "runId": "init",
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+        # #endregion
+        obs_encoder = build_obs_encoder(
+            observation_space=obs_dict,
+            encoder_type=self.obs_encoder_type,
+            img_crop_shape=crop_shape,
+            out_channel=encoder_output_dim,
+            pointcloud_encoder_cfg=pointcloud_encoder_cfg,
+            use_pc_color=use_pc_color,
+            pointnet_type=pointnet_type,
+            state_encoder_cfg=state_encoder_cfg,
+        )
 
         obs_feature_dim = obs_encoder.output_shape()
         input_dim = action_dim + obs_feature_dim
@@ -84,8 +118,12 @@ class FlowPolicy(BasePolicy):
 
         self.use_pc_color = use_pc_color
         self.pointnet_type = pointnet_type
-        cprint(f"[FlowUnetHybridPointcloudPolicy] use_pc_color: {self.use_pc_color}", "yellow")
-        cprint(f"[FlowUnetHybridPointcloudPolicy] pointnet_type: {self.pointnet_type}", "yellow")
+        cprint(
+            f"[FlowPolicy] obs_encoder_type: {self.obs_encoder_type}", "yellow"
+        )
+        if self.obs_encoder_type == "pointnet":
+            cprint(f"[FlowPolicy] use_pc_color: {self.use_pc_color}", "yellow")
+            cprint(f"[FlowPolicy] pointnet_type: {self.pointnet_type}", "yellow")
 
 
         model = ConditionalUnet1D(
@@ -157,9 +195,8 @@ class FlowPolicy(BasePolicy):
         # normalize input
         nobs = self.normalizer.normalize(obs_dict)
         # this_n_point_cloud = nobs['imagin_robot'][..., :3] # only use coordinate
-        if not self.use_pc_color:
-            nobs['point_cloud'] = nobs['point_cloud'][..., :3]
-        this_n_point_cloud = nobs['point_cloud']
+        if self.obs_encoder_type == "pointnet" and not self.use_pc_color:
+            nobs["point_cloud"] = nobs["point_cloud"][..., :3]
         value = next(iter(nobs.values()))
         B, To = value.shape[:2]
         T = self.horizon
@@ -312,8 +349,8 @@ class FlowPolicy(BasePolicy):
         nactions = self.normalizer['action'].normalize(batch['action'])
         target = nactions
 
-        if not self.use_pc_color:
-            nobs['point_cloud'] = nobs['point_cloud'][..., :3]
+        if self.obs_encoder_type == "pointnet" and not self.use_pc_color:
+            nobs["point_cloud"] = nobs["point_cloud"][..., :3]
         batch_size = nactions.shape[0]
         horizon = nactions.shape[1]
         # handle different ways of passing observation
@@ -334,8 +371,6 @@ class FlowPolicy(BasePolicy):
             else:
                 # reshape back to B, Do
                 global_cond = nobs_features.reshape(batch_size, -1)
-            this_n_point_cloud = this_nobs['point_cloud'].reshape(batch_size,-1, *this_nobs['point_cloud'].shape[1:])
-            this_n_point_cloud = this_n_point_cloud[..., :3]
         else:
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))

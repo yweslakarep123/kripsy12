@@ -32,7 +32,10 @@ def _resolve_zarr_path(zarr_path: str) -> str:
 
 
 class KitchenDataset(BaseDataset):
-    """Zarr dataset with keys state, action, point_cloud (same layout as MetaworldDataset)."""
+    """Zarr dataset: ``state``, ``action``, dan opsional ``point_cloud``.
+
+    Mode state-only (Franka Kitchen): hanya ``state`` + ``action``; ``agent_pos`` = ``state``.
+    """
 
     def __init__(
         self,
@@ -71,9 +74,14 @@ class KitchenDataset(BaseDataset):
                 "Path relatif dihitung dari folder paket FlowPolicy (tempat train.py). "
                 "Gunakan path absolut jika dataset berada di lokasi lain."
             )
-        self.replay_buffer = ReplayBuffer.copy_from_path(
-            zarr_path, keys=["state", "action", "point_cloud"]
-        )
+        import zarr as _zarr
+
+        root = _zarr.open(zarr_path, mode="r")
+        keys = ["state", "action"]
+        if "point_cloud" in root["data"]:
+            keys.append("point_cloud")
+        self._has_point_cloud = "point_cloud" in keys
+        self.replay_buffer = ReplayBuffer.copy_from_path(zarr_path, keys=keys)
         n_eps = self.replay_buffer.n_episodes
         self._explicit_val_indices: Optional[List[int]] = None
         profile = (preprocessing_profile or "minimal").lower()
@@ -164,9 +172,10 @@ class KitchenDataset(BaseDataset):
     def get_normalizer(self, mode="limits", **kwargs):
         data = {
             "action": self.replay_buffer["action"],
-            "agent_pos": self.replay_buffer["state"][...,:],
-            "point_cloud": self.replay_buffer["point_cloud"],
+            "agent_pos": self.replay_buffer["state"][..., :],
         }
+        if self._has_point_cloud:
+            data["point_cloud"] = self.replay_buffer["point_cloud"]
         normalizer = LinearNormalizer()
         normalizer.fit(data=data, last_n_dims=1, mode=mode, **kwargs)
         return normalizer
@@ -176,15 +185,10 @@ class KitchenDataset(BaseDataset):
 
     def _sample_to_data(self, sample):
         agent_pos = sample["state"][:,].astype(np.float32)
-        point_cloud = sample["point_cloud"][:,].astype(np.float32)
-
-        data = {
-            "obs": {
-                "point_cloud": point_cloud,
-                "agent_pos": agent_pos,
-            },
-            "action": sample["action"].astype(np.float32),
-        }
+        obs = {"agent_pos": agent_pos}
+        if self._has_point_cloud:
+            obs["point_cloud"] = sample["point_cloud"][:,].astype(np.float32)
+        data = {"obs": obs, "action": sample["action"].astype(np.float32)}
         return data
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
@@ -195,9 +199,10 @@ class KitchenDataset(BaseDataset):
             std = self._obs_noise_std
             ap = torch_data["obs"]["agent_pos"]
             torch_data["obs"]["agent_pos"] = ap + torch.randn_like(ap) * std
-            pc = torch_data["obs"]["point_cloud"]
-            torch_data["obs"]["point_cloud"] = pc.clone()
-            torch_data["obs"]["point_cloud"][..., :3] = (
-                pc[..., :3] + torch.randn_like(pc[..., :3]) * std
-            )
+            if "point_cloud" in torch_data["obs"]:
+                pc = torch_data["obs"]["point_cloud"]
+                torch_data["obs"]["point_cloud"] = pc.clone()
+                torch_data["obs"]["point_cloud"][..., :3] = (
+                    pc[..., :3] + torch.randn_like(pc[..., :3]) * std
+                )
         return torch_data

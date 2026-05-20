@@ -26,7 +26,10 @@ KITCHEN_PC_BOUNDS = {
 
 class FrankaKitchenPointCloudEnv(gym.Env):
     """
-    FrankaKitchen (Gymnasium) dengan observasi FlowPolicy (point cloud + low-dim).
+    FrankaKitchen (Gymnasium) untuk FlowPolicy.
+
+    ``obs_mode="state"``: vektor observasi MuJoCo penuh (59-d) sebagai ``agent_pos``.
+    ``obs_mode="point_cloud"``: point cloud + ``agent_pos`` (9-d, legacy).
 
     Jika ``task_completion_order`` diisi, reward sparse hanya ketika task berikutnya
     dalam urutan itu pertama kali memenuhi threshold (task lain tidak dihitung lebih dulu).
@@ -34,12 +37,14 @@ class FrankaKitchenPointCloudEnv(gym.Env):
     """
 
     metadata = {"render.modes": ["rgb_array"], "video.frames_per_second": 12}
+    STATE_OBS_DIM = 59
 
     def __init__(
         self,
         tasks_to_complete=None,
         task_completion_order=None,
         device="cuda",
+        obs_mode: str = "state",
         use_point_crop=True,
         num_points=512,
         image_size=128,
@@ -70,6 +75,13 @@ class FrankaKitchenPointCloudEnv(gym.Env):
             else:
                 tasks_for_env = list(tasks_to_complete)
 
+        self.obs_mode = str(obs_mode).lower()
+        if self.obs_mode not in ("state", "point_cloud"):
+            raise ValueError(
+                f"obs_mode harus 'state' atau 'point_cloud', dapat {obs_mode!r}"
+            )
+        self._use_point_cloud = self.obs_mode == "point_cloud"
+
         if cam_names is None:
             cam_names = ["left_cap", "right_cap"]
 
@@ -90,13 +102,14 @@ class FrankaKitchenPointCloudEnv(gym.Env):
         self.image_size = image_size
         self._device = device
 
-        self._pc_gen = NativeMuJoCoPointCloudGenerator(
-            self.model, cam_names=cam_names, img_size=image_size
-        )
-
-        b = KITCHEN_PC_BOUNDS["default"]
-        self.min_bound = np.array(b["min_bound"], dtype=np.float32)
-        self.max_bound = np.array(b["max_bound"], dtype=np.float32)
+        self._pc_gen = None
+        if self._use_point_cloud:
+            self._pc_gen = NativeMuJoCoPointCloudGenerator(
+                self.model, cam_names=cam_names, img_size=image_size
+            )
+            b = KITCHEN_PC_BOUNDS["default"]
+            self.min_bound = np.array(b["min_bound"], dtype=np.float32)
+            self.max_bound = np.array(b["max_bound"], dtype=np.float32)
 
         self.action_space = spaces.Box(
             low=self._gymnasium_env.action_space.low,
@@ -111,23 +124,24 @@ class FrankaKitchenPointCloudEnv(gym.Env):
 
         self._reset_sequential_state()
 
-        obs_dim = 9
-        self.observation_space = spaces.Dict(
-            {
-                "agent_pos": spaces.Box(
-                    low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
-                ),
-                "point_cloud": spaces.Box(
-                    low=-np.inf,
-                    high=np.inf,
-                    shape=(num_points, 3),
-                    dtype=np.float32,
-                ),
-            }
-        )
+        obs_dim = 9 if self._use_point_cloud else self.STATE_OBS_DIM
+        obs_space = {
+            "agent_pos": spaces.Box(
+                low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
+            ),
+        }
+        if self._use_point_cloud:
+            obs_space["point_cloud"] = spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=(num_points, 3),
+                dtype=np.float32,
+            )
+        self.observation_space = spaces.Dict(obs_space)
         cprint(
             f"[FrankaKitchenPointCloudEnv] tasks={tasks_for_env} "
-            f"sequential_order={self._task_completion_order} num_points={num_points}",
+            f"obs_mode={self.obs_mode} sequential_order={self._task_completion_order} "
+            f"num_points={num_points if self._use_point_cloud else 'n/a'}",
             "cyan",
         )
 
@@ -157,12 +171,16 @@ class FrankaKitchenPointCloudEnv(gym.Env):
         except Exception:
             pass
         # #endregion
-        self._pc_gen.close()
+        if self._pc_gen is not None:
+            self._pc_gen.close()
         self._gymnasium_env.close()
         super().close()
 
     def _agent_pos(self, obs_dict) -> np.ndarray:
-        return obs_dict["observation"][:9].astype(np.float32)
+        obs = np.asarray(obs_dict["observation"], dtype=np.float32).reshape(-1)
+        if self._use_point_cloud:
+            return obs[:9]
+        return obs[: self.STATE_OBS_DIM]
 
     def _get_point_cloud(self) -> np.ndarray:
         pts, _ = self._pc_gen.generate(self.data, use_rgb=False)
@@ -179,10 +197,10 @@ class FrankaKitchenPointCloudEnv(gym.Env):
         return pts.astype(np.float32)
 
     def _wrap_obs(self, gym_obs) -> dict:
-        return {
-            "agent_pos": self._agent_pos(gym_obs),
-            "point_cloud": self._get_point_cloud(),
-        }
+        out = {"agent_pos": self._agent_pos(gym_obs)}
+        if self._use_point_cloud:
+            out["point_cloud"] = self._get_point_cloud()
+        return out
 
     def _augment_info(self, info: dict) -> dict:
         if self._task_completion_order:
