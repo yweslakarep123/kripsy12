@@ -22,7 +22,6 @@ from termcolor import cprint
 class KitchenRunner(BaseRunner):
     """Metrik success_rate_k1…k4: prefix tugas selesai (urutan sequential atau multitask legacy)."""
 
-    # Multitask Kitchen-Complete (tanpa task_completion_order) — urutan D4RL klasik.
     K_LEVEL_SPECS_MULTITASK = (
         frozenset({"microwave"}),
         frozenset({"microwave", "light switch"}),
@@ -41,6 +40,12 @@ class KitchenRunner(BaseRunner):
             prefix.append(task)
             specs.append(frozenset(prefix))
         return tuple(specs)
+
+    @staticmethod
+    def task_order_from_completion_order(task_completion_order) -> tuple:
+        if task_completion_order:
+            return tuple(task_completion_order)
+        return ("microwave", "light switch", "kettle", "slide cabinet")
 
     def __init__(
         self,
@@ -68,6 +73,9 @@ class KitchenRunner(BaseRunner):
         super().__init__(output_dir)
         self.task_name = task_name
         self.k_level_specs = self.k_level_specs_from_order(task_completion_order)
+        self.task_order_list = self.task_order_from_completion_order(
+            task_completion_order
+        )
 
         def env_fn():
             return MultiStepWrapper(
@@ -223,6 +231,7 @@ class KitchenRunner(BaseRunner):
         current_ep_lat_ms.clear()
 
         ep_success_levels = []
+        per_task_hits = {t: [] for t in self.task_order_list}
         per_episode_mean_inference_latency_ms: list[float] = []
         n_eps = int(self.eval_episodes if n_episodes is None else n_episodes)
         video_root = (
@@ -263,6 +272,8 @@ class KitchenRunner(BaseRunner):
                 spec.issubset(last_completions) for spec in self.k_level_specs
             ]
             ep_success_levels.append(levels_met)
+            for task in self.task_order_list:
+                per_task_hits[task].append(float(task in last_completions))
 
             ep_mean = (
                 float(np.mean(current_ep_lat_ms)) if current_ep_lat_ms else 0.0
@@ -290,13 +301,19 @@ class KitchenRunner(BaseRunner):
             "success_rate_k2": float(sr[:, 1].mean() * 100.0),
             "success_rate_k3": float(sr[:, 2].mean() * 100.0),
             "success_rate_k4": float(sr[:, 3].mean() * 100.0),
+        }
+        for task in self.task_order_list:
+            key = f"success_rate_task_{task.replace(' ', '_')}"
+            hits = per_task_hits[task]
+            out[key] = float(np.mean(hits) * 100.0) if hits else 0.0
+        out.update({
             "mean_inference_latency_ms": mean_lat,
             "std_inference_latency_ms": std_lat,
             "per_episode_mean_inference_latency_ms": per_episode_mean_inference_latency_ms,
             "mean_episode_mean_inference_latency_ms": mean_episode_mean_lat,
             "std_episode_mean_inference_latency_ms": std_episode_mean_lat,
             "n_infer_episodes": int(n_eps),
-        }
+        })
         out["trade_off"] = (
             float(out["success_rate_k4"] / mean_lat) if mean_lat > 1e-9 else 0.0
         )
