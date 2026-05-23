@@ -152,6 +152,8 @@ OUTPUT_DIR=outputs/smoke1 ZARR_PATH=FlowPolicy/data/kitchen_complete_from_minari
 | Mode | Skrip pintasan | Isi |
 |------|----------------|-----|
 | Baseline + Hyperband + rerun pemenang | `./scripts/run_experiment.sh` | Fase 1→2→3 (default produksi) |
+| **≤ ~2 hari @ ~30 TFLOPS** | `./scripts/run_twoday_30tflops.sh` | Hyperband + rerun (tanpa baseline); `R=1200`, bracket `s=2` saja |
+| **≤ ~2 hari @ ~100 TFLOPS** | `./scripts/run_twoday_100tflops.sh` | Baseline + Hyperband (`s=2..0`) + rerun; `R=3000` |
 | Hanya baseline (6 run) | `./scripts/run_baseline_only.sh` | Lewati Hyperband |
 | Hanya Hyperband + rerun pemenang | `./scripts/run_hyperband_only.sh` | Lewati baseline |
 
@@ -180,15 +182,143 @@ conda activate flowpolicy-kitchen
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
-**Hyperband hemat waktu (≤ ~2 hari, single-bracket SHA):**
+**≤ ~2 hari @ ~30 TFLOPS** (Hyperband + rerun; lihat detail di bawah):
 
 ```bash
-./scripts/run_experiment.sh \
-  --output-dir outputs/exp_fast \
-  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
-  --hyperband-s-max 2 \
-  --hyperband-s-min 2
+./scripts/run_twoday_30tflops.sh
 ```
+
+**≤ ~2 hari @ ~100 TFLOPS** (baseline + Hyperband + rerun):
+
+```bash
+./scripts/run_twoday_100tflops.sh
+```
+
+### Anggaran ~48 jam (2 hari) — GPU ~30 TFLOPS vs ~100 TFLOPS
+
+Asumsi kalibrasi (satu run = **3000 epoch**, **1 seed × 1 profil**, `batch_size` ≤ 128):
+
+| GPU efektif | Waktu per run | 48 jam ≈ |
+|-------------|---------------|----------|
+| **~30 TFLOPS** | ~2,7 jam | ~18 run penuh setara |
+| **~100 TFLOPS** | ~0,8 jam | ~60 run penuh setara |
+
+Setiap **trial Hyperband** memakai **3 seed × 2 profil** (`standard` = observasi ter-augmentasi, `minimal` = tanpa augmentasi) → faktor **×6** pada waktu training vs satu run di atas. Resume checkpoint antar-rung Hyperband menghemat compute (estimasi di bawah sudah memperhitungkan ~45–55% penghematan).
+
+**Kalibrasi wajib di mesin Anda:** jalankan satu baseline, hitung jam untuk 3000 epoch, lalu skala: `total ≈ jam_per_run × (beban_setara_run)`.
+
+#### Opsi disarankan — GPU ~30 TFLOPS (≤ 48 jam)
+
+Hyperband + rerun pemenang saja (baseline dilewati agar muat 2 hari). Single-bracket SHA (`s_max=s_min=2`), resource `R=1200`.
+
+```bash
+conda activate flowpolicy-kitchen
+chmod +x scripts/run_twoday_30tflops.sh
+
+./scripts/run_twoday_30tflops.sh \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
+```
+
+Folder default: `outputs/twoday_30tflops/`. Perkiraan: **~30–45 jam** (Hyperband ~15–25 jam + rerun 6 run ~16 jam).
+
+Jika masih melewati 48 jam, tambahkan ke perintah yang sama:
+
+```bash
+  --hyperband-max-epochs 800 \
+  --hyperband-s-min 2 \
+  --max-batch-size 64 \
+  --dataloader-num-workers 0
+```
+
+Setara Python langsung:
+
+```bash
+python scripts/run_experiment.py \
+  --hyperband-only \
+  --output-dir outputs/twoday_30tflops \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
+  --seeds 0 42 101 \
+  --profiles standard minimal \
+  --hyperband-max-epochs 1200 \
+  --hyperband-eta 3 \
+  --hyperband-s-max 2 \
+  --hyperband-s-min 2 \
+  --hyperband-seed 99 \
+  --hyperband-sampling baseline_anchored \
+  --hyperband-iterations 1 \
+  --max-batch-size 128 \
+  --dataloader-num-workers 2
+```
+
+#### Opsi disarankan — GPU ~100 TFLOPS (≤ 48 jam)
+
+Baseline (6 run) + Hyperband bracket `s=2,1,0` + rerun pemenang (6 run), `R=3000`.
+
+```bash
+conda activate flowpolicy-kitchen
+chmod +x scripts/run_twoday_100tflops.sh
+
+./scripts/run_twoday_100tflops.sh \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
+```
+
+Folder default: `outputs/twoday_100tflops/`. Perkiraan: **~35–50 jam** total.
+
+Jika masih ada slack (< 48 jam) dan ingin pencarian lebih luas, ganti bracket ke single-bracket penuh `R` (lebih mahal):
+
+```bash
+./scripts/run_twoday_100tflops.sh \
+  --hyperband-s-min 2 \
+  --hyperband-s-max 2
+```
+
+Hanya Hyperband + rerun (tanpa baseline), muat dengan margin besar:
+
+```bash
+python scripts/run_experiment.py \
+  --hyperband-only \
+  --output-dir outputs/twoday_100tflops_hb \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
+  --seeds 0 42 101 \
+  --profiles standard minimal \
+  --hyperband-max-epochs 3000 \
+  --hyperband-eta 3 \
+  --hyperband-s-max 2 \
+  --hyperband-s-min 0 \
+  --hyperband-seed 99 \
+  --hyperband-sampling baseline_anchored \
+  --max-batch-size 128
+```
+
+Setara perintah pintasan `run_twoday_100tflops.sh` (Python penuh):
+
+```bash
+python scripts/run_experiment.py \
+  --output-dir outputs/twoday_100tflops \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
+  --seeds 0 42 101 \
+  --profiles standard minimal \
+  --hyperband-max-epochs 3000 \
+  --hyperband-eta 3 \
+  --hyperband-s-max 2 \
+  --hyperband-s-min 0 \
+  --hyperband-seed 99 \
+  --hyperband-sampling baseline_anchored \
+  --hyperband-iterations 1 \
+  --max-batch-size 128 \
+  --dataloader-num-workers 4
+```
+
+#### Yang tidak muat dalam 48 jam (hindari di GPU 30 TFLOPS)
+
+| Konfigurasi | Perkiraan @ 30 TFLOPS |
+|-------------|------------------------|
+| `./scripts/run_experiment.sh` default (`s_min=0`, semua bracket native) | **mingguan** |
+| `--hyperband-s-max 2 --hyperband-s-min 0` + `R=3000` + 3×2 profil | **~150+ jam** |
+
+#### Resume dalam batas 2 hari
+
+Jalankan ulang **perintah yang sama** dengan `--output-dir` yang sama; Hyperband melanjutkan dari `hyperband_state.json`. Jangan ganti `R`, `s_min`, `s_max`, `--seeds`, atau `--profiles` di tengah jalan.
 
 Setara memanggil Python langsung (semua flag tersedia):
 
@@ -200,8 +330,8 @@ python scripts/run_experiment.py \
   --hyperband-eta 3 \
   --hyperband-s-min 0 \
   --hyperband-seed 99 \
-  --hyperband-search-train-seed 0 \
-  --hyperband-search-profile standard
+  --seeds 0 42 101 \
+  --profiles standard minimal
 ```
 
 ### Laptop 8 GB — knob VRAM (tambahkan ke perintah di atas)
@@ -333,7 +463,7 @@ Skrip **`scripts/run_experiment.py`** menjalankan tiga fase **berurutan**:
 | Fase | Isi | Jumlah run (default) |
 |------|-----|------------------------|
 | **1. Baseline** | Hyperparameter default FlowPolicy (`experiment_constants.DEFAULT_BASELINE_HPARAMS`) × **3 seed** × **2 profil preprocessing** | **6** |
-| **2. Hyperband** | Sampling random konfigurasi dari `SEARCH_SPACE` (tanpa `training.num_epochs` — itu resource), evaluasi dengan **`val_loss`** sebagai sinyal early-stopping antar-rung, di **1 seed × 1 profile** (default seed=0, profile=`standard`). State: `hyperband_state.json`. | tergantung `R`, `eta`, `s_min`, `s_max` — lihat tabel di bawah |
+| **2. Hyperband** | Sampling dari baseline + tweak lokal; setiap trial dilatih di **semua `--seeds × --profiles`** (default 3×2: `standard` ter-augmentasi, `minimal` tanpa). Sinyal antar-rung = rata-rata `val_loss`. State: `hyperband_state.json`. | tergantung `R`, `eta`, `s_min`, `s_max`, dan 6× biaya train per trial |
 | **3. Rerun pemenang** | Konfigurasi pemenang Hyperband (val_loss terkecil di antara semua evaluasi) di-rerun **penuh** (train + infer + simpan ke `results.csv` `status=ok`) pada **3 seed × 2 profil** dengan `training.num_epochs = R`. Baris CSV: `cfg_idx = -3`. | **6** |
 
 **Total default:** 6 baseline + (Hyperband, ~14–24 baseline-equivalent tergantung `s_min`) + 6 rerun = **12 run tercatat di `results.csv` + sekitar 50–130 evaluasi Hyperband intermediate** (tidak ditulis ke `results.csv`; ada di `hyperband_state.json`).
@@ -371,7 +501,7 @@ Cost ≈ jumlah epoch yang dilatih total. Asumsikan 1 "baseline-equivalent" = 30
 | 1 | 1 | s = 1 saja | ~20000 | ~6.7 |
 | 0 | 0 | s = 0 saja (random search 8 config @ R) | ~24000 | ~8 |
 
-**Penting (anggaran 2 hari):** jika 1 baseline run ≈ 8 jam, maka 2 hari = 6 baseline-equivalent. Konfigurasi paling aman untuk fit **≤ 2 hari**: **`--hyperband-s-max 2 --hyperband-s-min 2`** (single-bracket SHA s=2, ~4.7 baseline-equivalent ≈ **38 jam**). Default `s_min=0` di shell pintasan menjalankan multi-bracket Hyperband penuh sesuai paper, tetapi membutuhkan compute lebih besar.
+**Penting (anggaran 2 hari):** angka di tabel di atas adalah **1 seed × 1 profil**. Dengan **3 seed × 2 profil** per trial Hyperband, kalikan waktu wall-clock kira-kira **×6**, lalu lihat skrip **`run_twoday_30tflops.sh`** / **`run_twoday_100tflops.sh`** dan bagian [Anggaran ~48 jam](#anggaran-48-jam-2-hari--gpu-30-tflops-vs-100-tflops). Default `./scripts/run_experiment.sh` (`s_min=0`, semua bracket) **tidak** muat dalam 48 jam pada GPU 30 TFLOPS.
 
 ### Menjalankan dari akar repositori
 
@@ -407,23 +537,9 @@ Untuk **melewati baseline** dan hanya menjalankan Hyperband + rerun pemenang, gu
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
-**Opsi B — Python langsung (single-bracket SHA, fit ≤ 2 hari):**
+**Opsi B — Python langsung (single-bracket SHA, hemat waktu):**
 
-```bash
-python scripts/run_experiment.py \
-  --hyperband-only \
-  --hyperband-max-epochs 3000 \
-  --hyperband-eta 3 \
-  --hyperband-s-max 2 \
-  --hyperband-s-min 2 \
-  --hyperband-seed 99 \
-  --hyperband-search-train-seed 0 \
-  --hyperband-search-profile standard \
-  --seeds 0 42 101 \
-  --profiles standard minimal \
-  --output-dir outputs/hb_fast \
-  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
-```
+Lihat bagian [Anggaran ~48 jam](#anggaran-48-jam-2-hari--gpu-30-tflops-vs-100-tflops) atau `./scripts/run_twoday_30tflops.sh` / `./scripts/run_twoday_100tflops.sh`.
 
 **Opsi C — multi-bracket Hyperband penuh (sesuai paper, lebih mahal):**
 
@@ -547,11 +663,13 @@ Jika masih OOM setelah **`16`**, tidak ada pengaturan aman lain di orchestrator 
 | `--hyperband-only` | (off) | Hanya Hyperband + rerun pemenang top-1; baseline dilewati. |
 | `--hyperband-max-epochs` | `3000` | Resource maksimum Hyperband per konfigurasi (`R`). |
 | `--hyperband-eta` | `3` | Rasio downsampling antar-rung Hyperband (`eta`, sesuai paper). |
-| `--hyperband-s-min` | `0` | Bracket terkecil yang dijalankan; naikkan ke `2` (single-bracket SHA) untuk fit ≤ 2 hari. |
-| `--hyperband-s-max` | `None` | Bracket terbesar; default = `floor(log_eta(R))`. Bisa di-cap (mis. `2`) untuk batasi compute. |
+| `--hyperband-s-min` | `0` | Bracket terkecil; `2` = single-bracket SHA (preset 2 hari @ 30 TFLOPS). |
+| `--hyperband-s-max` | `None` | Bracket terbesar; cap `2` untuk batasi compute. |
 | `--hyperband-seed` | `99` | Seed RNG sampling konfigurasi Hyperband. |
-| `--hyperband-search-train-seed` | `0` | Seed training selama fase Hyperband (1 seed saja). |
-| `--hyperband-search-profile` | `standard` | Profil preprocessing selama fase Hyperband (1 profil saja). |
+| `--hyperband-sampling` | `baseline_anchored` | Warm-start dari baseline + tweak lokal (`random` = cold start). |
+| `--hyperband-iterations` | `1` | KerasTuner `hyperband_iterations`. |
+| `--seeds` | `0 42 101` | Dipakai baseline **dan** Hyperband (evaluasi per trial). |
+| `--profiles` | `standard minimal` | `standard` = augmentasi obs; `minimal` = tanpa augmentasi. |
 
 ### Keluaran
 

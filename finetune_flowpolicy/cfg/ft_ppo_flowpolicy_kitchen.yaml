@@ -2,7 +2,7 @@
 #
 # Catatan:
 # - Encoder + normalizer di-FREEZE dan dipanggil di env wrapper, sehingga obs di buffer
-#   sudah flat feature `obs_dim=128` per frame (n_obs_steps=2).
+#   sudah flat feature `obs_dim` per frame (state encoder: 64; legacy pointnet: 128).
 # - K=1 inference step (sesuai pretraining ConsistencyFM); noise injection state-conditioned
 #   memberikan eksplorasi sambil mempertahankan kompatibilitas Rectified Flow Euler murni.
 
@@ -19,7 +19,7 @@ env_name: franka_kitchen_complete4
 action_dim: 9            # mengikuti pretrained checkpoint
 horizon_steps: 8         # FlowPolicy.horizon
 act_steps: 4             # n_action_steps yang dieksekusi env per panggilan policy
-obs_dim: 128             # output FlowPolicyEncoder per frame (pc 64 + state_mlp 64)
+obs_dim: 64              # output state encoder per frame (sesuaikan dengan encoder_output_dim ckpt)
 cond_steps: 2            # n_obs_steps di pretrained
 denoising_steps: 1       # K=1 Euler step
 ft_denoising_steps: 1
@@ -52,8 +52,13 @@ env:
   num_points: 512
   use_point_crop: true
   terminate_on_tasks_completed: true
-  tasks_to_complete: [microwave, kettle, slide cabinet, light switch]
-  task_completion_order: null
+  tasks_to_complete: null
+  task_completion_order:
+    - microwave
+    - kettle
+    - light switch
+    - slide cabinet
+  terminate_on_tasks_completed: false
   wrappers: null
 
 # -------------------- wandb --------------------

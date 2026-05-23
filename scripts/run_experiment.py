@@ -59,6 +59,7 @@ from experiment_constants import (  # noqa: E402
     CSV_HPARAM_KEYS,
     HYPERBAND_BEST_CFG_IDX,
     RESULTS_CSV_METRIC_COLUMNS,
+    append_kitchen_policy_hparam_overrides,
     baseline_config_dict,
     compute_horizon,
     empty_metrics_row,
@@ -113,7 +114,7 @@ def load_or_create_config_bundle(
     configs_path.parent.mkdir(parents=True, exist_ok=True)
     bundle = {
         "version": 5,
-        "search_mode": "hyperband",
+        "search_mode": "random_search_around_baseline",
         "baseline": baseline,
     }
     with open(configs_path, "w") as f:
@@ -178,13 +179,7 @@ def build_train_overrides(
     else:
         odl.append("training.rollout_every=999999")
 
-    for k in CSV_HPARAM_KEYS:
-        if k == "cfg_idx":
-            continue
-        if k == "_state_mlp_hidden":
-            odl.append(f"policy.encoder_output_dim={_fmt_hydra_val(cfg[k])}")
-            continue
-        odl.append(f"{k}={_fmt_hydra_val(cfg[k])}")
+    append_kitchen_policy_hparam_overrides(odl, cfg)
     return odl
 
 

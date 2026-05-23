@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Konversi dataset Minari D4RL Kitchen (mis. ``D4RL/kitchen/complete-v2``) ke zarr
-format ``KitchenDataset`` / ``ReplayBuffer``: ``state`` (T,9), ``action`` (T,9),
-``point_cloud`` (T,512,3).
+format ``KitchenDataset`` / ``ReplayBuffer``: ``state`` (T,59), ``action`` (T,9),
+dan opsional ``point_cloud`` (T,512,3) kecuali ``--no-point-cloud``.
 
 Dataset Minari hanya menyimpan vektor ``observation`` 59-d (bukan point cloud).
 Skrip ini merekonstruksi ``qpos``/``qvel`` MuJoCo dari vektor tersebut (sesuai
@@ -162,6 +162,11 @@ def main():
         action="store_true",
         help="Matikan crop bounding box (sama dengan use_point_crop=False).",
     )
+    p.add_argument(
+        "--no-point-cloud",
+        action="store_true",
+        help="Hanya ekspor state (59-d) + action; tanpa point_cloud (state-based FlowPolicy).",
+    )
     args = p.parse_args()
 
     gym.register_envs(gymnasium_robotics)
@@ -174,11 +179,14 @@ def main():
     max_bound = np.array(b["max_bound"], dtype=np.float32)
     use_point_crop = not args.no_point_crop
 
-    cam_names = ["left_cap", "right_cap"]
-    img_size = 128
-    pc_gen = NativeMuJoCoPointCloudGenerator(
-        ke.model, cam_names=cam_names, img_size=img_size
-    )
+    skip_pc = bool(args.no_point_cloud)
+    pc_gen = None
+    if not skip_pc:
+        cam_names = ["left_cap", "right_cap"]
+        img_size = 128
+        pc_gen = NativeMuJoCoPointCloudGenerator(
+            ke.model, cam_names=cam_names, img_size=img_size
+        )
 
     out_path = os.path.expanduser(args.out)
     if os.path.isdir(out_path):
@@ -201,30 +209,33 @@ def main():
         acts: list[np.ndarray] = []
         for t in range(n_act):
             o = obs_flat[t]
-            set_sim_state(ke, o)
-            pc = build_point_cloud(
-                pc_gen,
-                ke.data,
-                ke.model,
-                use_point_crop=use_point_crop,
-                min_bound=min_bound,
-                max_bound=max_bound,
-                num_points=args.num_points,
-                device=args.device,
-                sampling=args.sampling,
-            )
-            states.append(o[:9].astype(np.float32))
-            clouds.append(pc)
+            states.append(np.asarray(o, dtype=np.float32).reshape(59))
             acts.append(np.asarray(actions[t], dtype=np.float32))
+            if not skip_pc:
+                set_sim_state(ke, o)
+                pc = build_point_cloud(
+                    pc_gen,
+                    ke.data,
+                    ke.model,
+                    use_point_crop=use_point_crop,
+                    min_bound=min_bound,
+                    max_bound=max_bound,
+                    num_points=args.num_points,
+                    device=args.device,
+                    sampling=args.sampling,
+                )
+                clouds.append(pc)
         ep_data = {
             "state": np.stack(states, axis=0),
             "action": np.stack(acts, axis=0),
-            "point_cloud": np.stack(clouds, axis=0),
         }
+        if not skip_pc:
+            ep_data["point_cloud"] = np.stack(clouds, axis=0)
         buffer.add_episode(ep_data)
         print(f"episode {ep_idx + 1}/{n_eps} steps={n_act}")
 
-    pc_gen.close()
+    if pc_gen is not None:
+        pc_gen.close()
     base_env.close()
     print(f"Saved zarr with {buffer.n_episodes} episodes -> {out_path}")
 

@@ -1,6 +1,6 @@
-"""Wrapper untuk FrankaKitchenPointCloudEnv yang:
-1) Pre-encode dict obs (point_cloud + agent_pos) menjadi flat ``{"state": (D,)}``
-   memakai ``FlowPolicyEncoder`` (FROZEN) + ``LinearNormalizer`` dari checkpoint.
+"""Wrapper untuk Franka Kitchen yang:
+1) Pre-encode dict obs (``agent_pos`` [+ opsional point_cloud]) menjadi flat ``{"state": (D,)}``
+   memakai obs encoder FlowPolicy (FROZEN) + ``LinearNormalizer`` dari checkpoint.
 2) Unnormalize action [-1, 1] (output policy) menjadi ruang aksi raw env via normalizer.
 3) Mengubah API reset Gymnasium (obs, info) menjadi gym-style (obs saja) supaya
    kompatibel dengan ``ReinFlow MultiStep`` wrapper.
@@ -16,7 +16,7 @@ from gym import spaces
 
 import finetune_flowpolicy.paths  # noqa: F401  side-effect: setup sys.path
 from flow_policy_3d.model.common.normalizer import LinearNormalizer
-from flow_policy_3d.model.vision.pointnet_extractor import FlowPolicyEncoder
+from flow_policy_3d.model.vision.pointnet_extractor import build_obs_encoder
 
 
 class PreEncodeObsWrapper(gym.Wrapper):
@@ -33,7 +33,7 @@ class PreEncodeObsWrapper(gym.Wrapper):
         self,
         env: gym.Env,
         *,
-        encoder: FlowPolicyEncoder,
+        encoder,
         normalizer: LinearNormalizer,
         device: str = "cpu",
         use_pc_color: bool = False,
@@ -78,11 +78,15 @@ class PreEncodeObsWrapper(gym.Wrapper):
     def _encode_obs(self, raw_obs: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
         """Encode dict obs -> {"state": (obs_feature_dim,) float32}."""
         # ke tensor di device encoder, tambah batch-dim
-        pc = torch.as_tensor(raw_obs["point_cloud"], dtype=torch.float32, device=self._device).unsqueeze(0)
         ap = torch.as_tensor(raw_obs["agent_pos"], dtype=torch.float32, device=self._device).unsqueeze(0)
-        # normalisasi via LinearNormalizer (key-based)
-        normed = self._normalizer.normalize({"point_cloud": pc, "agent_pos": ap})
-        if not self._use_pc_color:
+        batch = {"agent_pos": ap}
+        if "point_cloud" in raw_obs:
+            pc = torch.as_tensor(
+                raw_obs["point_cloud"], dtype=torch.float32, device=self._device
+            ).unsqueeze(0)
+            batch["point_cloud"] = pc
+        normed = self._normalizer.normalize(batch)
+        if "point_cloud" in normed and not self._use_pc_color:
             normed["point_cloud"] = normed["point_cloud"][..., :3]
         feat = self._encoder(normed)  # (1, obs_feature_dim)
         return {"state": feat.squeeze(0).detach().cpu().numpy().astype(np.float32)}
