@@ -112,6 +112,8 @@ def run_random_search(
     center_hparams: Optional[Dict[str, Any]] = None,
     sigma: float = 1.0,
     p_exact_baseline: float = 0.15,
+    enable_early_stop: bool = True,
+    early_stop_rollout_every: int = 200,
 ) -> Optional[Dict[str, Any]]:
     """Jalankan random search dan kembalikan konfigurasi pemenang."""
     out_root = pathlib.Path(out_root).resolve()
@@ -178,7 +180,9 @@ def run_random_search(
         cfg_idx = int(cstate["cfg_idx"])
         cfg = dict(cstate["hparams"])
         cfg["cfg_idx"] = cfg_idx
-        run_dir = _run_dir_for_cfg(runs_root, cfg_idx)
+        run_dir = _run_dir_for_cfg(
+            runs_root, cfg_idx, search_train_seed, search_profile
+        )
         target_epochs = int(cfg["training.num_epochs"])
         already_trained = int(cstate.get("epoch_trained", 0))
 
@@ -204,6 +208,8 @@ def run_random_search(
             zarr_rel=zarr_rel,
             checkpoint_every=checkpoint_every,
             dataloader_num_workers=dataloader_num_workers,
+            enable_early_stop=enable_early_stop,
+            early_stop_rollout_every=early_stop_rollout_every,
         )
         if rc == 0:
             cstate["epoch_trained"] = int(epoch_trained)

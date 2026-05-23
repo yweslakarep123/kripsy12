@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Uji coba Hyperband di laptop (VRAM ~8 GB) — BUKAN run produksi.
+# Uji coba random search di laptop (VRAM ~8 GB) — BUKAN run produksi.
 #
-# Tujuan: memastikan orkestrator + train.py + hyperband_state.json jalan
-# end-to-end dengan biaya waktu kecil (R=4 epoch, 1 bracket, 1 seed rerun).
+# Tujuan: memastikan orkestrator + train.py + random_search_state.json jalan
+# end-to-end dengan biaya waktu kecil (N=2 trial, profil minimal, 1 seed rerun).
 #
 # Prasyarat:
 #   conda activate flowpolicy-kitchen
@@ -35,16 +35,15 @@ ZARR="${ZARR_PATH:-FlowPolicy/data/kitchen_complete_from_minari.zarr}"
 OUT="${OUTPUT_DIR:-outputs/laptop_hyperband_smoke}"
 
 exec python scripts/run_experiment.py \
-  --hyperband-only \
+  --search-only \
   --output-dir "$OUT" \
   --zarr-path "$ZARR" \
   --seeds 0 \
-  --profiles standard \
-  --hyperband-max-epochs 4 \
-  --hyperband-eta 2 \
-  --hyperband-s-max 1 \
-  --hyperband-s-min 1 \
-  --hyperband-seed 7 \
+  --profiles minimal \
+  --random-search-n 2 \
+  --random-search-seed 7 \
+  --search-train-seed 0 \
+  --search-profile minimal \
   --n-infer-episodes 2 \
   --n-train-val-episodes 0 \
   --max-batch-size 16 \

@@ -6,14 +6,15 @@ Struktur repositori:
 
 ```text
 <akar-repo>/                # root Git (folder berisi scripts + FlowPolicy)
-├── scripts/                # orkestrator eksperimen (baseline + Hyperband)
+├── scripts/                # orkestrator eksperimen (baseline + random search)
 │   ├── run_experiment.py
-│   ├── run_experiment.sh         # pintasan CLI: baseline lalu Hyperband
+│   ├── run_experiment.sh         # pintasan CLI: baseline lalu random search
 │   ├── run_baseline_only.sh      # hanya baseline (6 run default)
-│   ├── run_hyperband_only.sh     # hanya Hyperband + rerun pemenang top-1
-│   ├── run_hyperband_laptop_smoke.sh   # smoke test Hyperband (laptop, R kecil)
-│   ├── verify_hyperband_no_gpu.sh      # cek logika Hyperband tanpa GPU
-│   ├── hyperband_search.py       # implementasi Hyperband (Li et al., 2018)
+│   ├── run_hyperband_only.sh     # hanya random search + rerun pemenang (nama legacy)
+│   ├── run_hyperband_laptop_smoke.sh   # smoke test random search (laptop)
+│   ├── verify_hyperband_no_gpu.sh      # cek logika Hyperband lama (tanpa GPU)
+│   ├── random_search.py          # random search berpusat di baseline
+│   ├── hyperband_search.py       # Hyperband legacy (tidak dipakai orkestrator utama)
 │   ├── cv_splits.py
 │   ├── summarize.py
 │   ├── plot_results.py
@@ -28,7 +29,7 @@ Struktur repositori:
 
 - Perintah **training tunggal** (`train.py`): dari **`FlowPolicy/`** (folder yang berisi `train.py`).
 - **Pipeline eksperimen** (`scripts/run_experiment.py`): dijalankan dari **akar repositori** (folder induk `scripts/` dan `FlowPolicy/`).
-- **Cheat sheet perintah** (conda, smoke test laptop, Hyperband, Vast.ai): lihat [Referensi perintah penting](#referensi-perintah-penting).
+- **Cheat sheet perintah** (conda, random search minimal, smoke test laptop, Vast.ai): lihat [Referensi perintah penting](#referensi-perintah-penting).
 
 ## Prasyarat
 
@@ -120,7 +121,63 @@ Jadikan skrip shell dapat dieksekusi (sekali saja):
 chmod +x scripts/*.sh
 ```
 
-### Verifikasi logika Hyperband (tanpa GPU, cepat)
+### Random search saja (profil **minimal**, disarankan)
+
+Fase pencarian hiperparameter memakai **satu seed × profil `minimal`** (tanpa augmentasi observasi), dengan **early stopping** aktif (eval simulasi Kitchen setiap 200 epoch). Pemenang (`val_loss` terkecil) di-rerun penuh (train + inferensi) pada `--seeds × --profiles`.
+
+**Skrip pintasan** (default: N=16 trial, search di `seed=0` × `minimal`, rerun di 3 seed × 2 profil):
+
+```bash
+conda activate flowpolicy-kitchen
+chmod +x scripts/run_hyperband_only.sh
+
+./scripts/run_hyperband_only.sh \
+  --output-dir outputs/search_only \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
+```
+
+**Python langsung** (semua flag eksplisit):
+
+```bash
+python scripts/run_experiment.py \
+  --search-only \
+  --output-dir outputs/search_only \
+  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
+  --random-search-n 16 \
+  --random-search-seed 99 \
+  --random-search-sigma 1.0 \
+  --search-train-seed 0 \
+  --search-profile minimal \
+  --seeds 0 42 101 \
+  --profiles standard minimal \
+  --early-stop-rollout-every 200 \
+  --max-batch-size 128 \
+  --dataloader-num-workers 4 \
+  --cv-seed 12345
+```
+
+**Hanya profil `minimal` di seluruh pipeline** (search + baseline/rerun), tambahkan:
+
+```bash
+  --profiles minimal
+```
+
+(pada skrip pintasan, argumen setelah `"$@"` bisa meng-override: `./scripts/run_hyperband_only.sh --profiles minimal`)
+
+| Aspek | Nilai default | Keterangan |
+|-------|---------------|------------|
+| Profil search | `minimal` | `--search-profile minimal` |
+| Seed search | `0` | `--search-train-seed 0` (satu run training per trial) |
+| Trial | `16` | `--random-search-n 16` |
+| Early stop | **on** | `--disable-early-stop` untuk mematikan |
+| Rollout eval | setiap **200** epoch | `--early-stop-rollout-every 200` |
+| Sinyal pemenang | `val_loss_final` | dari `training_final.json` per trial |
+| Video MP4 | hanya fase **inferensi** rerun | `runs/.../inference_videos/infer_ep_*.mp4`; eval training tidak menyimpan MP4 |
+| Resume search | `random_search_state.json` | jangan ganti `N`, `--random-search-seed`, `--search-train-seed`, atau `--search-profile` di tengah jalan |
+
+Folder trial search: `runs/hb_cfg<idx>_seed0_minimal/` (cfg_idx ≥ 1000). Rerun pemenang: `runs/hb_best_seed<seed>_<profile>/` (`cfg_idx=-3`).
+
+### Verifikasi logika Hyperband legacy (tanpa GPU, cepat)
 
 Memastikan rumus bracket, Successive Halving, dan `hyperband_state.json` benar — **tidak** melatih model:
 
@@ -131,14 +188,14 @@ conda activate flowpolicy-kitchen
 
 ### Smoke test di laptop (8 GB VRAM, end-to-end ringan)
 
-Setelah `torch.cuda.is_available()` bernilai `True`. Epoch sedikit (`R=4`), satu bracket, satu seed — hanya untuk memastikan pipeline jalan:
+Setelah `torch.cuda.is_available()` bernilai `True`. N=2 trial, epoch sedikit via early stop / config — hanya memastikan pipeline jalan:
 
 ```bash
 conda activate flowpolicy-kitchen
 ./scripts/run_hyperband_laptop_smoke.sh
 ```
 
-Keluaran: `outputs/laptop_hyperband_smoke/` (`hyperband_state.json`, `runs/hb_cfg*/`, `runs/hb_best_seed0_standard/`).
+Keluaran: `outputs/laptop_hyperband_smoke/` (`random_search_state.json`, `runs/hb_cfg*_seed0_minimal/`).
 
 Override path keluaran / zarr:
 
@@ -151,11 +208,10 @@ OUTPUT_DIR=outputs/smoke1 ZARR_PATH=FlowPolicy/data/kitchen_complete_from_minari
 
 | Mode | Skrip pintasan | Isi |
 |------|----------------|-----|
-| Baseline + Hyperband + rerun pemenang | `./scripts/run_experiment.sh` | Fase 1→2→3 (default produksi) |
-| **≤ ~2 hari @ ~30 TFLOPS** | `./scripts/run_twoday_30tflops.sh` | Hyperband + rerun (tanpa baseline); `R=1200`, bracket `s=2` saja |
-| **≤ ~2 hari @ ~100 TFLOPS** | `./scripts/run_twoday_100tflops.sh` | Baseline + Hyperband (`s=2..0`) + rerun; `R=3000` |
-| Hanya baseline (6 run) | `./scripts/run_baseline_only.sh` | Lewati Hyperband |
-| Hanya Hyperband + rerun pemenang | `./scripts/run_hyperband_only.sh` | Lewati baseline |
+| Baseline + random search + rerun pemenang | `./scripts/run_experiment.sh` | Fase 1→2→3 (default produksi) |
+| **Random search + rerun** (profil search `minimal`) | `./scripts/run_hyperband_only.sh` | Lewati baseline; N=16 trial default |
+| Hanya baseline (6 run) | `./scripts/run_baseline_only.sh` | Lewati random search |
+| Smoke test laptop | `./scripts/run_hyperband_laptop_smoke.sh` | N kecil, VRAM 8 GB |
 
 **Produksi (default, dari laptop kuat atau Vast.ai):**
 
@@ -174,167 +230,45 @@ conda activate flowpolicy-kitchen
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
-**Hanya Hyperband (+ rerun top-1 di 3 seed × 2 profil):**
+**Hanya random search (+ rerun top-1 di 3 seed × 2 profil):**
 
 ```bash
 ./scripts/run_hyperband_only.sh \
-  --output-dir outputs/hyperband_only \
+  --output-dir outputs/search_only \
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
-**≤ ~2 hari @ ~30 TFLOPS** (Hyperband + rerun; lihat detail di bawah):
+Contoh di Vast.ai / cloud (sesuaikan path):
 
 ```bash
-./scripts/run_twoday_30tflops.sh
-```
-
-**≤ ~2 hari @ ~100 TFLOPS** (baseline + Hyperband + rerun):
-
-```bash
-./scripts/run_twoday_100tflops.sh
-```
-
-### Anggaran ~48 jam (2 hari) — GPU ~30 TFLOPS vs ~100 TFLOPS
-
-Asumsi kalibrasi (satu run = **3000 epoch**, **1 seed × 1 profil**, `batch_size` ≤ 128):
-
-| GPU efektif | Waktu per run | 48 jam ≈ |
-|-------------|---------------|----------|
-| **~30 TFLOPS** | ~2,7 jam | ~18 run penuh setara |
-| **~100 TFLOPS** | ~0,8 jam | ~60 run penuh setara |
-
-Setiap **trial Hyperband** memakai **3 seed × 2 profil** (`standard` = observasi ter-augmentasi, `minimal` = tanpa augmentasi) → faktor **×6** pada waktu training vs satu run di atas. Resume checkpoint antar-rung Hyperband menghemat compute (estimasi di bawah sudah memperhitungkan ~45–55% penghematan).
-
-**Kalibrasi wajib di mesin Anda:** jalankan satu baseline, hitung jam untuk 3000 epoch, lalu skala: `total ≈ jam_per_run × (beban_setara_run)`.
-
-#### Opsi disarankan — GPU ~30 TFLOPS (≤ 48 jam)
-
-Hyperband + rerun pemenang saja (baseline dilewati agar muat 2 hari). Single-bracket SHA (`s_max=s_min=2`), resource `R=1200`.
-
-```bash
+cd /workspace/kripsy12
 conda activate flowpolicy-kitchen
-chmod +x scripts/run_twoday_30tflops.sh
-
-./scripts/run_twoday_30tflops.sh \
-  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
-```
-
-Folder default: `outputs/twoday_30tflops/`. Perkiraan: **~30–45 jam** (Hyperband ~15–25 jam + rerun 6 run ~16 jam).
-
-Jika masih melewati 48 jam, tambahkan ke perintah yang sama:
-
-```bash
-  --hyperband-max-epochs 800 \
-  --hyperband-s-min 2 \
-  --max-batch-size 64 \
-  --dataloader-num-workers 0
-```
-
-Setara Python langsung:
-
-```bash
-python scripts/run_experiment.py \
-  --hyperband-only \
-  --output-dir outputs/twoday_30tflops \
+./scripts/run_hyperband_only.sh \
+  --output-dir outputs/search_only \
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
-  --seeds 0 42 101 \
-  --profiles standard minimal \
-  --hyperband-max-epochs 1200 \
-  --hyperband-eta 3 \
-  --hyperband-s-max 2 \
-  --hyperband-s-min 2 \
-  --hyperband-seed 99 \
-  --hyperband-sampling baseline_anchored \
-  --hyperband-iterations 1 \
-  --max-batch-size 128 \
-  --dataloader-num-workers 2
+  --random-search-n 16
 ```
 
-#### Opsi disarankan — GPU ~100 TFLOPS (≤ 48 jam)
+### Anggaran waktu (random search)
 
-Baseline (6 run) + Hyperband bracket `s=2,1,0` + rerun pemenang (6 run), `R=3000`.
+Asumsi kalibrasi (satu run penuh = **3000 epoch**, **1 seed × 1 profil**, `batch_size` ≤ 128):
 
-```bash
-conda activate flowpolicy-kitchen
-chmod +x scripts/run_twoday_100tflops.sh
+| GPU efektif | Waktu per run penuh | Catatan |
+|-------------|---------------------|---------|
+| **~30 TFLOPS** | ~2,7 jam | Early stop sering menghentikan lebih awal |
+| **~100 TFLOPS** | ~0,8 jam | |
 
-./scripts/run_twoday_100tflops.sh \
-  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
-```
+**Fase random search (default):** `N=16` trial × **1 seed × profil `minimal`**. Setiap trial dilatih sampai `training.num_epochs` (default 3000) atau berhenti lebih awal via early stop. Perkiraan kasar: `16 × waktu_per_run` (bisa jauh lebih sedikit jika early stop aktif).
 
-Folder default: `outputs/twoday_100tflops/`. Perkiraan: **~35–50 jam** total.
+**Fase rerun pemenang:** **6 run** (3 seed × 2 profil) train + inferensi penuh.
 
-Jika masih ada slack (< 48 jam) dan ingin pencarian lebih luas, ganti bracket ke single-bracket penuh `R` (lebih mahal):
+**Kalibrasi wajib di mesin Anda:** jalankan satu trial search atau satu baseline, hitung jam untuk satu run, lalu skala.
 
-```bash
-./scripts/run_twoday_100tflops.sh \
-  --hyperband-s-min 2 \
-  --hyperband-s-max 2
-```
+#### Resume
 
-Hanya Hyperband + rerun (tanpa baseline), muat dengan margin besar:
+Jalankan ulang **perintah yang sama** dengan `--output-dir` yang sama; random search melanjutkan dari `random_search_state.json`. Jangan ganti `--random-search-n`, `--random-search-seed`, `--search-train-seed`, atau `--search-profile` di tengah jalan.
 
-```bash
-python scripts/run_experiment.py \
-  --hyperband-only \
-  --output-dir outputs/twoday_100tflops_hb \
-  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
-  --seeds 0 42 101 \
-  --profiles standard minimal \
-  --hyperband-max-epochs 3000 \
-  --hyperband-eta 3 \
-  --hyperband-s-max 2 \
-  --hyperband-s-min 0 \
-  --hyperband-seed 99 \
-  --hyperband-sampling baseline_anchored \
-  --max-batch-size 128
-```
-
-Setara perintah pintasan `run_twoday_100tflops.sh` (Python penuh):
-
-```bash
-python scripts/run_experiment.py \
-  --output-dir outputs/twoday_100tflops \
-  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
-  --seeds 0 42 101 \
-  --profiles standard minimal \
-  --hyperband-max-epochs 3000 \
-  --hyperband-eta 3 \
-  --hyperband-s-max 2 \
-  --hyperband-s-min 0 \
-  --hyperband-seed 99 \
-  --hyperband-sampling baseline_anchored \
-  --hyperband-iterations 1 \
-  --max-batch-size 128 \
-  --dataloader-num-workers 4
-```
-
-#### Yang tidak muat dalam 48 jam (hindari di GPU 30 TFLOPS)
-
-| Konfigurasi | Perkiraan @ 30 TFLOPS |
-|-------------|------------------------|
-| `./scripts/run_experiment.sh` default (`s_min=0`, semua bracket native) | **mingguan** |
-| `--hyperband-s-max 2 --hyperband-s-min 0` + `R=3000` + 3×2 profil | **~150+ jam** |
-
-#### Resume dalam batas 2 hari
-
-Jalankan ulang **perintah yang sama** dengan `--output-dir` yang sama; Hyperband melanjutkan dari `hyperband_state.json`. Jangan ganti `R`, `s_min`, `s_max`, `--seeds`, atau `--profiles` di tengah jalan.
-
-Setara memanggil Python langsung (semua flag tersedia):
-
-```bash
-python scripts/run_experiment.py \
-  --output-dir outputs/experiment \
-  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
-  --hyperband-max-epochs 3000 \
-  --hyperband-eta 3 \
-  --hyperband-s-min 0 \
-  --hyperband-seed 99 \
-  --seeds 0 42 101 \
-  --profiles standard minimal
-```
-
-### Laptop 8 GB — knob VRAM (tambahkan ke perintah di atas)
+#### Laptop 8 GB — knob VRAM (tambahkan ke perintah di atas)
 
 ```bash
   --max-batch-size 16 \
@@ -342,16 +276,15 @@ python scripts/run_experiment.py \
   --skip-inference-videos
 ```
 
-Contoh pipeline penuh di laptop 8 GB (lambat; disarankan smoke test dulu):
+Contoh random search di laptop 8 GB (lambat; disarankan smoke test dulu):
 
 ```bash
-./scripts/run_experiment.sh \
-  --output-dir outputs/laptop_full \
+./scripts/run_hyperband_only.sh \
+  --output-dir outputs/laptop_search \
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
+  --random-search-n 4 \
   --max-batch-size 16 \
   --dataloader-num-workers 0 \
-  --hyperband-s-max 2 \
-  --hyperband-s-min 2 \
   --skip-inference-videos
 ```
 
@@ -367,7 +300,7 @@ Contoh pipeline penuh di laptop 8 GB (lambat; disarankan smoke test dulu):
 
 ### Melanjutkan eksperimen / folder baru
 
-Jalankan ulang perintah yang sama di `--output-dir` yang sama — job selesai (`metrics.json` atau `status=ok` di CSV) dilewati; Hyperband melanjutkan dari `hyperband_state.json`.
+Jalankan ulang perintah yang sama di `--output-dir` yang sama — job selesai (`metrics.json` atau `status=ok` di CSV) dilewati; random search melanjutkan dari `random_search_state.json`.
 
 Mulai dari nol (folder baru):
 
@@ -377,7 +310,7 @@ mkdir -p outputs/experiment_fresh
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
-Hapus manual isi folder lama jika ingin train ulang semua di path yang sama: `runs/`, `results.csv`, `configs.json`, `hyperband_state.json`, `cv_splits.json`.
+Hapus manual isi folder lama jika ingin train ulang semua di path yang sama: `runs/`, `results.csv`, `configs.json`, `random_search_state.json`, `cv_splits.json`.
 
 ### Agregasi dan plot (tanpa training ulang)
 
@@ -419,14 +352,13 @@ python infer_kitchen.py \
 
 ```bash
 conda activate flowpolicy-kitchen
-cd /workspace/<repo>
-./scripts/run_experiment.sh \
-  --output-dir outputs/vast_exp \
+cd /workspace/kripsy12
+./scripts/run_hyperband_only.sh \
+  --output-dir outputs/search_only \
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
-  --max-batch-size 64 \
-  --dataloader-num-workers 2 \
-  --hyperband-s-max 2 \
-  --hyperband-s-min 2
+  --random-search-n 16 \
+  --max-batch-size 128 \
+  --dataloader-num-workers 4
 ```
 
 Variabel lingkungan opsional: `WANDB_API_KEY`, `WANDB_MODE=offline`.
@@ -454,7 +386,7 @@ Override umum lain:
 
 Checkpoint dan log Hydra biasanya di bawah `FlowPolicy/data/outputs/` (atau sesuai `hydra.run.dir`).
 
-## Pipeline eksperimen (baseline + Hyperband, tanpa k-fold)
+## Pipeline eksperimen (baseline + random search, tanpa k-fold)
 
 Pelatihan **tidak** memakai validasi silang berlipat (k-fold). Episode dibagi **sekali** menjadi train / validation / test (`scripts/cv_splits.py`): satu partisi tetap, dapat direproduksi dengan `--cv-seed`.
 
@@ -463,45 +395,24 @@ Skrip **`scripts/run_experiment.py`** menjalankan tiga fase **berurutan**:
 | Fase | Isi | Jumlah run (default) |
 |------|-----|------------------------|
 | **1. Baseline** | Hyperparameter default FlowPolicy (`experiment_constants.DEFAULT_BASELINE_HPARAMS`) × **3 seed** × **2 profil preprocessing** | **6** |
-| **2. Hyperband** | Sampling dari baseline + tweak lokal; setiap trial dilatih di **semua `--seeds × --profiles`** (default 3×2: `standard` ter-augmentasi, `minimal` tanpa). Sinyal antar-rung = rata-rata `val_loss`. State: `hyperband_state.json`. | tergantung `R`, `eta`, `s_min`, `s_max`, dan 6× biaya train per trial |
-| **3. Rerun pemenang** | Konfigurasi pemenang Hyperband (val_loss terkecil di antara semua evaluasi) di-rerun **penuh** (train + infer + simpan ke `results.csv` `status=ok`) pada **3 seed × 2 profil** dengan `training.num_epochs = R`. Baris CSV: `cfg_idx = -3`. | **6** |
+| **2. Random search** | `N` trial (default **16**) disampling di sekitar baseline; setiap trial dilatih **1 seed × 1 profil** (`--search-train-seed 0`, `--search-profile minimal`). Sinyal pemenang = **`val_loss_final` terkecil**. Early stop aktif (eval simulasi tiap 200 epoch). State: `random_search_state.json`. | **16** trial (tidak ditulis ke `results.csv`) |
+| **3. Rerun pemenang** | Konfigurasi pemenang di-rerun **penuh** (train + infer + `results.csv` `status=ok`) pada **3 seed × 2 profil**. Baris CSV: `cfg_idx = -3`. | **6** |
 
-**Total default:** 6 baseline + (Hyperband, ~14–24 baseline-equivalent tergantung `s_min`) + 6 rerun = **12 run tercatat di `results.csv` + sekitar 50–130 evaluasi Hyperband intermediate** (tidak ditulis ke `results.csv`; ada di `hyperband_state.json`).
+**Total default:** 6 baseline + 16 trial search + 6 rerun = **12 run tercatat di `results.csv`** + evaluasi intermediate search di `random_search_state.json`.
 
-Profil preprocessing (proxy "dengan / tanpa" augmentasi observasi): **`standard`** (noise observasi) dan **`minimal`** (tanpa noise tersebut). Tiap run punya folder sendiri di `runs/`.
+Profil preprocessing: **`standard`** (augmentasi/noise observasi) dan **`minimal`** (tanpa augmentasi). **Fase search default memakai `minimal` saja**; baseline dan rerun tetap bisa keduanya lewat `--profiles`.
 
-### Hyperband (Li et al., 2018) singkat
+### Random search singkat
 
-Hyperband (https://arxiv.org/pdf/1603.06560) menggabungkan **random search + Successive Halving** dengan alokasi resource adaptif. Untuk Kitchen, **resource = jumlah epoch training**. Kunci:
+- **`--random-search-n`**: jumlah trial (default 16).
+- **`--random-search-seed`**: seed RNG sampling konfigurasi (default 99).
+- **`--random-search-sigma`**: lebar sampling Gaussian di sekitar baseline (default 1.0).
+- **`--search-train-seed`** / **`--search-profile`**: seed dan profil **satu-satunya** dipakai saat melatih setiap trial (default `0` × **`minimal`**).
+- Setiap trial dilatih penuh hingga `training.num_epochs` (dari config, default 3000) atau berhenti lebih awal via **early stopping** (monitor `success_rate_k1…k4` di simulasi).
+- Sinyal `val_loss` dari `training_final.json.val_loss_final` (`training.compute_val_loss=true`).
+- **Inferensi rollout + MP4** hanya pada fase **baseline / rerun pemenang**, bukan selama trial search.
 
-- `R` (`--hyperband-max-epochs`): jumlah epoch maksimum per konfigurasi (default **3000** = baseline default).
-- `eta` (`--hyperband-eta`): rasio downsampling antar-rung (default **3** sesuai paper).
-- `s_max_native = floor(log_eta(R))` → untuk `R=3000, eta=3`: `s_max_native = 7`.
-- `B = (s_max_native + 1) * R` → anggaran teoritis penuh Hyperband.
-- Untuk tiap bracket `s in {s_max, ..., s_min}`:
-  - `n_s = ceil( int(B/R/(s+1)) * eta^s )` konfigurasi disampling acak.
-  - `r_s = R * eta^(-s)` epoch awal per konfigurasi.
-  - Successive Halving rung `i in {0..s}`: latih `n_s * eta^(-i)` konfigurasi ke `r_s * eta^i` epoch, lalu pertahankan **top floor(n_i / eta)** by val_loss.
-- Pemenang: konfigurasi dengan **val_loss terkecil di antara semua evaluasi** (sesuai paper Algorithm 1: "smallest intermediate loss seen so far").
-
-Sinyal `val_loss` diambil dari `training_final.json.val_loss_final` (sudah ditulis FlowPolicy `train.py` pada `training.compute_val_loss=true`). Inference rollout **tidak** dijalankan selama Hyperband — hanya pada fase **Rerun pemenang** (top-1) di 3 seeds × 2 profiles, agar `results.csv`/`summary.csv`/`plots/` memiliki metrik test lengkap yang dapat dibandingkan dengan baseline.
-
-**Deviasi praktis dari paper (didokumentasikan paper Section 5):** training **inkremental** antar-rung — konfigurasi yang lolos cull melanjutkan training dari `latest.ckpt` (`training.resume=true`) dengan `training.num_epochs = r_{i+1} - r_i`, BUKAN melatih ulang dari nol. Konfigurasi yang ter-cull, folder `runs/hb_cfg{idx}/` dihapus untuk hemat disk.
-
-### Anggaran waktu Hyperband (R=3000, eta=3)
-
-Cost ≈ jumlah epoch yang dilatih total. Asumsikan 1 "baseline-equivalent" = 3000 epoch training pada 1 seed × 1 profile.
-
-| `s_max` | `s_min` | Bracket dijalankan | Epoch-equivalent | Baseline-equivalent |
-|---|---|---|---|---|
-| 7 (native) | 0 | s = 7, 6, 5, 4, 3, 2, 1, 0 | ~131000 | ~44 |
-| 4 | 0 | s = 4, 3, 2, 1, 0 | ~87000 | ~29 |
-| 2 (default `s_max`) | 0 (default `s_min`) | s = 2, 1, 0 | ~58000 | ~19 |
-| 2 | 2 | **s = 2 saja** (single-bracket SHA) | ~14000 | **~4.7** |
-| 1 | 1 | s = 1 saja | ~20000 | ~6.7 |
-| 0 | 0 | s = 0 saja (random search 8 config @ R) | ~24000 | ~8 |
-
-**Penting (anggaran 2 hari):** angka di tabel di atas adalah **1 seed × 1 profil**. Dengan **3 seed × 2 profil** per trial Hyperband, kalikan waktu wall-clock kira-kira **×6**, lalu lihat skrip **`run_twoday_30tflops.sh`** / **`run_twoday_100tflops.sh`** dan bagian [Anggaran ~48 jam](#anggaran-48-jam-2-hari--gpu-30-tflops-vs-100-tflops). Default `./scripts/run_experiment.sh` (`s_min=0`, semua bracket) **tidak** muat dalam 48 jam pada GPU 30 TFLOPS.
+Flag **`--search-only`** / **`--hyperband-only`** (alias legacy): lewati baseline, jalankan random search + rerun saja.
 
 ### Menjalankan dari akar repositori
 
@@ -525,44 +436,25 @@ python scripts/run_experiment.py \
 
 Argumen `--zarr-path` **relatif terhadap folder berisi `train.py`** (lihat `KitchenDataset._resolve_zarr_path`). Untuk dataset di `FlowPolicy/FlowPolicy/data/`, gunakan nilai `FlowPolicy/data/kitchen_complete_from_minari.zarr` atau path absolut.
 
-### Hanya Hyperband (tanpa baseline)
+### Hanya random search (tanpa baseline)
 
-Untuk **melewati baseline** dan hanya menjalankan Hyperband + rerun pemenang, gunakan flag **`--hyperband-only`** di `run_experiment.py`, atau skrip pintasan **`scripts/run_hyperband_only.sh`**.
-
-**Opsi A — skrip pintasan:**
+Gunakan **`--search-only`** di `run_experiment.py`, atau skrip pintasan **`scripts/run_hyperband_only.sh`** (nama file legacy; isinya random search).
 
 ```bash
 ./scripts/run_hyperband_only.sh \
-  --output-dir outputs/hb \
+  --output-dir outputs/search_only \
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
-**Opsi B — Python langsung (single-bracket SHA, hemat waktu):**
+Flag **`--baseline-only`** dan **`--search-only`** / **`--hyperband-only`** saling eksklusif.
 
-Lihat bagian [Anggaran ~48 jam](#anggaran-48-jam-2-hari--gpu-30-tflops-vs-100-tflops) atau `./scripts/run_twoday_30tflops.sh` / `./scripts/run_twoday_100tflops.sh`.
+**Catatan:** opsi **`--results-csv`** mengubah lokasi **`results.csv`** untuk baseline dan rerun pemenang. Trial random search **tidak** ditulis ke `results.csv` — state-nya ada di **`random_search_state.json`**.
 
-**Opsi C — multi-bracket Hyperband penuh (sesuai paper, lebih mahal):**
-
-```bash
-python scripts/run_experiment.py \
-  --hyperband-only \
-  --hyperband-max-epochs 3000 \
-  --hyperband-eta 3 \
-  --hyperband-s-max 2 \
-  --hyperband-s-min 0 \
-  --output-dir outputs/hb_full \
-  --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
-```
-
-Flag **`--baseline-only`** dan **`--hyperband-only`** saling eksklusif (maksimal satu aktif).
-
-**Catatan:** opsi **`--results-csv`** juga mengubah lokasi **`results.csv`** untuk baseline dan rerun pemenang Hyperband. `summarize.py` / `plot_results.py` mendukung **`--results-csv`** yang sama jika Anda menjalankan agregasi manual. Hyperband fase intermediate **tidak** ditulis ke `results.csv` — state-nya ada di `hyperband_state.json`.
-
-Penjelasan **`--results-csv`**: jika **tidak** diberikan, file CSV default adalah `<output-dir>/results.csv`. Jika **diberikan** (relatif ke akar repo atau path absolut), semua baris metrik baseline + rerun pemenang Hyperband ditulis ke file itu, dan kombinasi `(cfg_idx, seed, profile, fold)` yang sudah **`status=ok`** di file tersebut **tidak** di-train / di-infer ulang — cocok untuk melanjutkan tanpa menduplikasi run yang sama.
+Penjelasan **`--results-csv`**: jika **tidak** diberikan, file CSV default adalah `<output-dir>/results.csv`. Kombinasi `(cfg_idx, seed, profile, fold)` yang sudah **`status=ok`** dilewati saat rerun/baseline.
 
 ### Training ulang: hanya baseline, folder baru (laptop, tanpa melanjutkan run lama)
 
-Orchestrator **melewati** job yang sudah selesai jika di `--output-dir` yang sama, per kombinasi run, sudah ada **`metrics.json`** di folder run tersebut. Untuk **baseline** dan **rerun pemenang Hyperband**, lewati juga berlaku jika **`results.csv`** (lihat **`--results-csv`** di bawah) memuat baris dengan kombinasi yang sama dan **`status=ok`**. Untuk **fase Hyperband intermediate**, resume mengandalkan **`hyperband_state.json`** (lihat `<output-dir>/hyperband_state.json`). Agar dianggap **mulai dari nol**, pakai **folder keluaran yang baru** (path yang belum dipakai), misalnya:
+Orchestrator **melewati** job yang sudah selesai jika di `--output-dir` yang sama sudah ada **`metrics.json`**. Untuk **baseline** dan **rerun pemenang**, lewati juga jika **`results.csv`** memuat baris `status=ok`. Untuk **fase random search**, resume dari **`random_search_state.json`**. Folder baru = mulai dari nol:
 
 ```bash
 mkdir -p outputs/baseline_laptop_fresh
@@ -588,7 +480,7 @@ python scripts/run_experiment.py \
 ```
 
 - Ganti nama **`outputs/baseline_laptop_fresh`** sesuai keinginan Anda (tanggal / mesin).
-- Jika Anda **sengaja** memakai ulang folder lama tetapi ingin train ulang semua, hapus dulu isinya (**`runs/`**, **`results.csv`** atau file yang Anda set di **`--results-csv`**, **`configs.json`**, **`hyperband_state.json`**, **`cv_splits.json`**) — hati-hati: data metrik lama hilang. Menghapus **`results.csv`** saja **tidak** memaksa ulang semua job: selama **`metrics.json`** masih ada di suatu folder run, job itu tetap dilewati; hapus juga folder run yang bersangkutan di **`runs/`** jika ingin train ulang dari awal.
+- Jika Anda **sengaja** memakai ulang folder lama tetapi ingin train ulang semua, hapus dulu isinya (**`runs/`**, **`results.csv`**, **`configs.json`**, **`random_search_state.json`**, **`cv_splits.json`**) — hati-hati: data metrik lama hilang.
 
 ### Opsi untuk GPU 16 GB
 
@@ -642,7 +534,7 @@ Contoh **konservatif (VRAM 8 GB / laptop)**:
   --dataloader-num-workers 0
 ```
 
-Jika masih OOM setelah **`16`**, tidak ada pengaturan aman lain di orchestrator selain **menurunkan hiperparameter batch di config** (mis. konfigurasi Hyperband yang memakai `batch_size` besar di `hyperband_state.json`) atau **menjalankan training tunggal** dengan override Hydra lebih agresif — pertimbangkan juga **instans GPU cloud** (lihat [Vast.ai](#menjalankan-di-vastai)) untuk pipeline Hyperband penuh agar waktu dan stabilitas lebih masuk akal.
+Jika masih OOM setelah **`16`**, turunkan **`--random-search-n`** atau **`--max-batch-size`**, atau gunakan GPU cloud (lihat [Vast.ai](#menjalankan-di-vastai)).
 
 **Tips laptop:** tutup aplikasi berat (browser dengan banyak tab, IDE lain), hindari sleep/hibernasi saat training panjang, dan pastikan daya AC terhubung (thermal GPU turun bisa memicu error atau throttling).
 
@@ -650,50 +542,50 @@ Jika masih OOM setelah **`16`**, tidak ada pengaturan aman lain di orchestrator 
 
 | Argumen | Default | Keterangan |
 |---------|---------|------------|
-| `--seeds` | `0 42 101` | Tiga seed untuk training / dataset / inferensi (baseline + rerun pemenang Hyperband). |
-| `--profiles` | `standard minimal` | Profil preprocessing dataset (baseline + rerun pemenang Hyperband). |
-| `--cv-seed` | `12345` | Seed **satu** pembagian episode train/val/test (bukan k-fold). |
-| `--n-infer-episodes` | `50` | Episode evaluasi setelah training. |
+| `--seeds` | `0 42 101` | Seed untuk baseline / rerun pemenang (train + inferensi). |
+| `--profiles` | `standard minimal` | Profil preprocessing baseline + rerun (`standard` = augmentasi; `minimal` = tanpa). |
+| `--search-only` | (off) | Hanya random search + rerun pemenang; lewati baseline. |
+| `--hyperband-only` | (off) | Alias legacy untuk `--search-only`. |
+| `--random-search-n` | `16` | Jumlah trial random search. |
+| `--random-search-seed` | `99` | Seed RNG sampling konfigurasi. |
+| `--random-search-sigma` | `1.0` | Lebar sampling di sekitar baseline. |
+| `--search-train-seed` | `0` | Seed training **selama fase search** (satu seed). |
+| `--search-profile` | **`minimal`** | Profil preprocessing **selama fase search** (satu profil). |
+| `--disable-early-stop` | (off) | Matikan early stopping (baseline, search, rerun). |
+| `--early-stop-rollout-every` | `200` | Interval epoch eval simulasi untuk early stop. |
+| `--cv-seed` | `12345` | Seed pembagian episode train/val/test. |
+| `--n-infer-episodes` | `50` | Episode evaluasi inferensi test (rerun/baseline). |
+| `--skip-inference-videos` | (off) | Lewati MP4 `infer_ep_*.mp4`. |
 | `--output-dir` | `outputs/experiment` | Relatif terhadap akar repo. |
-| `--results-csv` | (off) | Jalur `results.csv` (relatif repo atau absolut). Default bila tidak diisi: `<output-dir>/results.csv`. Baseline & rerun pemenang Hyperband: job dengan `status=ok` di file ini dilewati. |
-| `--max-batch-size` | `128` | Plafon batch train/val; turunkan untuk **GPU 16 GB** atau **laptop 8 GB** (lihat bagian di atas). |
+| `--results-csv` | (off) | Lokasi `results.csv` kustom; job `status=ok` dilewati. |
+| `--max-batch-size` | `128` | Plafon batch train/val. |
 | `--dataloader-num-workers` | `4` | Workers DataLoader. |
-| `--checkpoint-every` | `200` | Simpan checkpoint berkala (resume jika mesin mati). |
-| `--baseline-only` | (off) | Hanya baseline; fase Hyperband tidak dijalankan. |
-| `--hyperband-only` | (off) | Hanya Hyperband + rerun pemenang top-1; baseline dilewati. |
-| `--hyperband-max-epochs` | `3000` | Resource maksimum Hyperband per konfigurasi (`R`). |
-| `--hyperband-eta` | `3` | Rasio downsampling antar-rung Hyperband (`eta`, sesuai paper). |
-| `--hyperband-s-min` | `0` | Bracket terkecil; `2` = single-bracket SHA (preset 2 hari @ 30 TFLOPS). |
-| `--hyperband-s-max` | `None` | Bracket terbesar; cap `2` untuk batasi compute. |
-| `--hyperband-seed` | `99` | Seed RNG sampling konfigurasi Hyperband. |
-| `--hyperband-sampling` | `baseline_anchored` | Warm-start dari baseline + tweak lokal (`random` = cold start). |
-| `--hyperband-iterations` | `1` | KerasTuner `hyperband_iterations`. |
-| `--seeds` | `0 42 101` | Dipakai baseline **dan** Hyperband (evaluasi per trial). |
-| `--profiles` | `standard minimal` | `standard` = augmentasi obs; `minimal` = tanpa augmentasi. |
+| `--checkpoint-every` | `200` | Frekuensi simpan checkpoint (resume). |
+| `--baseline-only` | (off) | Hanya baseline; lewati random search. |
 
 ### Keluaran
 
 Di `--output-dir` (mis. `outputs/experiment/`):
 
-- `configs.json` — **`version: 5`**: berisi baseline (`baseline_config_dict()`) yang dipakai fase-1 dan rerun pemenang Hyperband.
-- `hyperband_state.json` — state lengkap Hyperband: parameter (`R`, `eta`, `s_min`, `s_max`), daftar bracket, konfigurasi per bracket, evaluasi val_loss per rung, dan pemenang final. Dipakai untuk resume mesin-mati Hyperband.
-- `cv_splits.json` — **satu** partisi train/val (+ meta `split_mode`, bukan daftar lipatan k-fold penuh).
-- `results.csv` — default di folder `--output-dir`, kecuali Anda set **`--results-csv`**. Satu baris per run baseline (`cfg_idx=-1`) atau rerun pemenang Hyperband (`cfg_idx=-3`). Hyperband intermediate (cfg_idx `>= 1000`) **tidak** ditulis ke CSV.
-- `runs/<nama_run>/` — output Hydra, `checkpoints/`, `metrics.json`, `training_final.json`.
-- `summary.csv`, `plots/*.png` dan `*.pdf` — dibuat otomatis di akhir (`summarize.py`, `plot_results.py`).
+- `configs.json` — baseline (`baseline_config_dict()`) untuk fase-1 dan rerun pemenang.
+- `random_search_state.json` — state random search: trial, `val_loss` per cfg, pemenang. Resume search.
+- `cv_splits.json` — satu partisi train/val (+ meta `split_mode`).
+- `results.csv` — baseline (`cfg_idx=-1`) dan rerun pemenang (`cfg_idx=-3`). Trial search **tidak** ada di CSV.
+- `runs/<nama_run>/` — Hydra output, `checkpoints/`, `metrics.json`, `training_final.json`, `inference_videos/` (setelah inferensi).
+- `summary.csv`, `plots/*` — dari `summarize.py` / `plot_results.py`.
 
 Nama folder run:
 
 - Baseline: `baseline_seed<seed>_<profile>` (`cfg_idx=-1`).
-- Rerun pemenang Hyperband: `hb_best_seed<seed>_<profile>` (`cfg_idx=-3`).
-- Hyperband intermediate: `hb_cfg<idx>/` (cfg_idx `>= 1000`, hanya bertahan untuk konfigurasi yang lolos cull; folder yang ter-cull dihapus otomatis untuk hemat disk).
+- Rerun pemenang search: `hb_best_seed<seed>_<profile>` (`cfg_idx=-3`).
+- Trial random search: `hb_cfg<idx>_seed<search_seed>_<search_profile>` (mis. `hb_cfg1000_seed0_minimal`).
 
 ### Resume setelah mesin mati
 
-- **Baseline** dan **rerun pemenang Hyperband**: run dilewati jika ada **`metrics.json`** di folder run, atau jika **`results.csv`** sudah memuat baris dengan kombinasi `(cfg_idx, seed, profile, fold)` yang sama dan **`status=ok`**.
-- **Hyperband fase intermediate**: state ada di **`hyperband_state.json`** — rung yang sudah punya `val_loss` (sukses) dilewati. Folder `runs/hb_cfg<idx>/` yang bertahan dipakai ulang untuk training inkremental rung berikutnya.
-- Training terputus (ada **`latest.ckpt`**, belum ada **`training_final.json`**) → training **dilanjutkan** (`training.resume=true`).
-- Training selesai (**`training_final.json`** + ckpt) tetapi inferensi belum → hanya **`infer_kitchen.py`** yang dijalankan.
+- **Baseline** dan **rerun pemenang**: dilewati jika ada **`metrics.json`** atau baris **`status=ok`** di `results.csv`.
+- **Random search**: resume dari **`random_search_state.json`** — trial dengan `done=true` dilewati.
+- Training terputus (`latest.ckpt`, belum `training_final.json`) → dilanjutkan (`training.resume=true`).
+- Training selesai, inferensi belum → hanya `infer_kitchen.py`.
 
 Konfigurasi tiap job dicetak ke **terminal** sebelum `train` / `infer`.
 
