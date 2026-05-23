@@ -6,7 +6,7 @@ Orkestrator eksperimen (tanpa k-fold, satu partisi train/val/test):
   2) Pencarian — **random search berpusat di baseline** (menggantikan Hyperband).
 
 Random search berjalan pada **satu seed × satu profile** (default: seed=0,
-profile=standard) menggunakan ``val_loss`` untuk memilih pemenang.
+profile=minimal) menggunakan ``val_loss`` untuk memilih pemenang.
 Setelah selesai, konfigurasi pemenang di-**rerun penuh**
 pada semua ``seeds × profiles`` user (default 3 × 2 = 6 run) dengan training
 + inference + write ``results.csv`` ``status=ok`` — analog baseline.
@@ -697,13 +697,13 @@ def main():
     ap.add_argument(
         "--search-profile",
         type=str,
-        default="standard",
-        help="Profil preprocessing SELAMA fase random search (1 profil saja).",
+        default="minimal",
+        help="Profil preprocessing SELAMA fase random search (1 profil saja; default: minimal).",
     )
     ap.add_argument(
         "--disable-early-stop",
         action="store_true",
-        help="Nonaktifkan early stopping success-rate per task saat training.",
+        help="Nonaktifkan early stopping success-rate (baseline, random search, dan rerun).",
     )
     ap.add_argument(
         "--early-stop-rollout-every",
@@ -811,6 +811,8 @@ def main():
             "    Baseline dilewati.\n"
             f"    N={args.random_search_n}, seed={args.random_search_seed}, "
             f"sigma={args.random_search_sigma}\n"
+            f"    Early stop random search: {'on' if enable_early_stop else 'off'}, "
+            f"rollout_every={args.early_stop_rollout_every}\n"
             f"    VRAM: max_batch_size={args.max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
         )
@@ -822,7 +824,8 @@ def main():
             "Satu partisi train/val, tanpa k-fold.\n"
             f"    Random search: N={args.random_search_n}, "
             f"seed={args.random_search_seed}, sigma={args.random_search_sigma}\n"
-            f"    Early stop baseline/rerun: {'on' if enable_early_stop else 'off'}\n"
+            f"    Early stop: {'on' if enable_early_stop else 'off'}, "
+            f"rollout_every={args.early_stop_rollout_every}\n"
             f"    VRAM: max_batch_size={args.max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
         )
@@ -890,6 +893,8 @@ def main():
             center_hparams=baseline_cfg,
             sigma=float(args.random_search_sigma),
             p_exact_baseline=float(args.random_search_p_exact_baseline),
+            enable_early_stop=enable_early_stop,
+            early_stop_rollout_every=args.early_stop_rollout_every,
         )
         if best is None:
             print(

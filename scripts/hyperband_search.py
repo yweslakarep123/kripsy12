@@ -181,6 +181,8 @@ def _build_train_overrides_hb(
     delta_num_epochs: int,
     checkpoint_every: int,
     dataloader_num_workers: int,
+    enable_early_stop: bool = False,
+    early_stop_rollout_every: int = 200,
 ) -> List[str]:
     n_obs = int(cfg["n_obs_steps"])
     n_act = int(cfg["n_action_steps"])
@@ -199,7 +201,6 @@ def _build_train_overrides_hb(
         f"training.seed={seed}",
         f"task.dataset.seed={seed}",
         "training.compute_val_loss=true",
-        "training.rollout_every=999999",
         f"training.resume={str(resume_training).lower()}",
         "checkpoint.save_ckpt=true",
         f"training.checkpoint_every={checkpoint_every}",
@@ -216,6 +217,15 @@ def _build_train_overrides_hb(
         f"val_dataloader.num_workers={dataloader_num_workers}",
         f"training.num_epochs={int(delta_num_epochs)}",
     ]
+    if enable_early_stop:
+        odl.extend(
+            [
+                "training.early_stop.enabled=true",
+                f"training.rollout_every={int(early_stop_rollout_every)}",
+            ]
+        )
+    else:
+        odl.append("training.rollout_every=999999")
     append_kitchen_policy_hparam_overrides(odl, cfg)
     return odl
 
@@ -439,6 +449,8 @@ def _evaluate_config_at_rung(
     zarr_rel: str,
     checkpoint_every: int,
     dataloader_num_workers: int,
+    enable_early_stop: bool = False,
+    early_stop_rollout_every: int = 200,
 ) -> Tuple[Optional[float], int, int]:
     """Latih ``cfg`` hingga ``target_epoch`` total (inkremental dari
     ``already_trained``). Kembalikan ``(val_loss, returncode, epoch_trained)``.
@@ -478,6 +490,8 @@ def _evaluate_config_at_rung(
         delta_num_epochs=delta,
         checkpoint_every=checkpoint_every,
         dataloader_num_workers=dataloader_num_workers,
+        enable_early_stop=enable_early_stop,
+        early_stop_rollout_every=early_stop_rollout_every,
     )
     env = os.environ.copy()
     env.setdefault("WANDB_MODE", "offline")

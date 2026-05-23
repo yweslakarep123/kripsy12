@@ -15,6 +15,6 @@ exec python3 scripts/run_experiment.py \
   --random-search-seed 99 \
   --random-search-sigma 1.0 \
   --search-train-seed 0 \
-  --search-profile standard \
+  --search-profile minimal \
   --cv-seed 12345 \
   "$@"
