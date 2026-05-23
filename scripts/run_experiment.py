@@ -6,7 +6,7 @@ Orkestrator eksperimen (tanpa k-fold, satu partisi train/val/test):
   2) Pencarian — **random search berpusat di baseline**.
 
 Random search berjalan pada **satu seed × satu profile** (default: seed=0,
-profile=standard — sama dengan satu run baseline) menggunakan ``val_loss`` untuk memilih pemenang.
+profile=minimal) menggunakan ``val_loss`` untuk memilih pemenang.
 Setelah selesai, konfigurasi pemenang di-**rerun penuh**
 pada semua ``seeds × profiles`` user (default 3 × 2 = 6 run) dengan training
 + inference + write ``results.csv`` ``status=ok`` — analog baseline.
@@ -78,6 +78,63 @@ def apply_vram_limits(cfg: Dict[str, Any], max_batch: int) -> Dict[str, Any]:
     c = dict(cfg)
     c["dataloader.batch_size"] = min(int(c["dataloader.batch_size"]), int(max_batch))
     return c
+
+
+def verify_zarr_has_point_cloud(zarr_rel: str) -> str:
+    """Pastikan zarr memuat ``point_cloud`` sebelum training point-net.
+
+    Returns:
+        Path absolut zarr yang diverifikasi.
+
+    Raises:
+        SystemExit: jika zarr tidak ada atau state-only (tanpa point_cloud).
+    """
+    zarr_rel = str(zarr_rel).strip()
+    if os.path.isabs(zarr_rel):
+        resolved = os.path.normpath(os.path.expanduser(zarr_rel))
+    else:
+        resolved = str((FLOWPOLICY_ROOT / zarr_rel).resolve())
+
+    if not os.path.isdir(resolved):
+        print(
+            f"[error] Zarr tidak ditemukan: {resolved}\n"
+            "Bangun dulu dengan:\n"
+            "  ./scripts/build_kitchen_pointcloud_zarr.sh\n"
+            f"  atau set --zarr-path ke path zarr yang valid.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    try:
+        import zarr as _zarr
+
+        root = _zarr.open(resolved, mode="r")
+        keys = list(root["data"].keys())
+    except Exception as e:
+        print(f"[error] Gagal membaca zarr {resolved}: {e}", file=sys.stderr)
+        raise SystemExit(1) from e
+
+    if "point_cloud" not in keys:
+        print(
+            f"[error] Zarr state-only (tanpa point_cloud) — pipeline ini memakai PointNet 512 pts.\n"
+            f"  path: {resolved}\n"
+            f"  keys: {keys}\n\n"
+            "Tidak ada file unduhan terpisah; generate di mesin ini:\n"
+            "  conda activate flowpolicy-kitchen\n"
+            "  ./scripts/build_kitchen_pointcloud_zarr.sh\n\n"
+            "Atau manual:\n"
+            "  python scripts/export_minari_kitchen_to_flowpolicy_zarr.py \\\n"
+            "    --out FlowPolicy/data/kitchen_complete_from_minari.zarr \\\n"
+            "    --minari-id D4RL/kitchen/complete-v2 --device cuda:0 --sampling fps\n",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    pc_shape = tuple(root["data"]["point_cloud"].shape)
+    print(
+        f"[zarr] OK point_cloud {pc_shape} @ {resolved}"
+    )
+    return resolved
 
 
 def load_or_create_config_bundle(
@@ -698,6 +755,8 @@ def main():
     else:
         results_csv = out_root / "results.csv"
 
+    verify_zarr_has_point_cloud(args.zarr_path)
+
     baseline_cfg = load_or_create_config_bundle(configs_path, args.max_batch_size)
 
     fold_entry = build_single_train_val_split(
@@ -752,6 +811,9 @@ def main():
             f"diikuti rerun top-1 pemenang di {n_final} run "
             f"({len(args.seeds)} seeds × {len(args.profiles)} profiles).\n"
             "    Baseline dilewati.\n"
+            f"    Fase SEARCH: seed={args.search_train_seed} × profile={args.search_profile!r} "
+            f"({args.random_search_n} trial).\n"
+            f"    Fase RERUN pemenang: --profiles {list(args.profiles)!r}.\n"
             f"    N={args.random_search_n}, seed={args.random_search_seed}, "
             f"sigma={args.random_search_sigma}\n"
             f"    Early stop random search: {'on' if enable_early_stop else 'off'}, "
