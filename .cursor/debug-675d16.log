@@ -76,3 +76,10 @@
 {"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_enter", "message": "NativeMuJoCoPointCloudGenerator.close enter", "data": {"n_renderers": 2}, "timestamp": 1779186870776, "hypothesisId": "H1,H3"}
 {"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:__del__", "message": "NativeMuJoCoPointCloudGenerator.__del__", "data": {"n_renderers": 2}, "timestamp": 1779186870776, "hypothesisId": "H1,H2,H3"}
 {"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_enter", "message": "NativeMuJoCoPointCloudGenerator.close enter", "data": {"n_renderers": 2}, "timestamp": 1779186870776, "hypothesisId": "H1,H3"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:__del__", "message": "NativeMuJoCoPointCloudGenerator.__del__", "data": {"n_renderers": 2}, "timestamp": 1779516521945, "hypothesisId": "H1,H2,H3"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_enter", "message": "NativeMuJoCoPointCloudGenerator.close enter", "data": {"n_renderers": 2}, "timestamp": 1779516521945, "hypothesisId": "H1,H3"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_enter", "message": "NativeMuJoCoPointCloudGenerator.close enter", "data": {"n_renderers": 2}, "timestamp": 1779517032666, "hypothesisId": "H1,H3"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_exit", "message": "NativeMuJoCoPointCloudGenerator.close done", "data": {}, "timestamp": 1779517032698, "hypothesisId": "H3"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:__del__", "message": "NativeMuJoCoPointCloudGenerator.__del__", "data": {"n_renderers": 0}, "timestamp": 1779517032708, "hypothesisId": "H1,H2,H3"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_enter", "message": "NativeMuJoCoPointCloudGenerator.close enter", "data": {"n_renderers": 0}, "timestamp": 1779517032708, "hypothesisId": "H1,H3"}
+{"sessionId": "675d16", "location": "mujoco_native_point_cloud.py:close_exit", "message": "NativeMuJoCoPointCloudGenerator.close done", "data": {}, "timestamp": 1779517032709, "hypothesisId": "H3"}

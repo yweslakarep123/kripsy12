@@ -1,6 +1,8 @@
 from typing import Dict, List, Optional
+import json
 import os
 import pathlib
+import time
 import torch
 import numpy as np
 import copy
@@ -14,6 +16,9 @@ from flow_policy_3d.common.sampler import (
 )
 from flow_policy_3d.model.common.normalizer import LinearNormalizer
 from flow_policy_3d.dataset.base_dataset import BaseDataset
+
+_AGENT_POS_DIM = 9
+_DEBUG_LOG = pathlib.Path(__file__).resolve().parents[3] / ".cursor" / "debug-ebd6f9.log"
 
 
 def _resolve_zarr_path(zarr_path: str) -> str:
@@ -31,10 +36,33 @@ def _resolve_zarr_path(zarr_path: str) -> str:
     return str((pkg_root / zarr_path).resolve())
 
 
-class KitchenDataset(BaseDataset):
-    """Zarr dataset: ``state``, ``action``, dan opsional ``point_cloud``.
+def _debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # #region agent log
+    try:
+        _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(_DEBUG_LOG, "a", encoding="utf-8") as _f:
+            _f.write(
+                json.dumps(
+                    {
+                        "sessionId": "ebd6f9",
+                        "hypothesisId": hypothesis_id,
+                        "location": location,
+                        "message": message,
+                        "data": data,
+                        "timestamp": int(time.time() * 1000),
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
 
-    Mode state-only (Franka Kitchen): hanya ``state`` + ``action``; ``agent_pos`` = ``state``.
+
+class KitchenDataset(BaseDataset):
+    """Zarr dataset dengan ``state``, ``action``, dan ``point_cloud`` (512×3).
+
+    ``agent_pos`` = 9 dimensi pertama ``state`` (selaras simulasi point-cloud Kitchen).
     """
 
     def __init__(
@@ -77,11 +105,30 @@ class KitchenDataset(BaseDataset):
         import zarr as _zarr
 
         root = _zarr.open(zarr_path, mode="r")
-        keys = ["state", "action"]
-        if "point_cloud" in root["data"]:
-            keys.append("point_cloud")
-        self._has_point_cloud = "point_cloud" in keys
-        self.replay_buffer = ReplayBuffer.copy_from_path(zarr_path, keys=keys)
+        zarr_keys = list(root["data"].keys())
+        has_point_cloud = "point_cloud" in zarr_keys
+        # #region agent log
+        _debug_log(
+            "A",
+            "kitchen_dataset.py:__init__",
+            "zarr keys inspected",
+            {"zarr_path": zarr_path, "zarr_keys": zarr_keys, "has_point_cloud": has_point_cloud},
+        )
+        # #endregion
+        if not has_point_cloud:
+            raise ValueError(
+                "KitchenDataset: zarr tidak memiliki key 'point_cloud' (state-only).\n"
+                f"  path: {zarr_path}\n"
+                f"  keys: {zarr_keys}\n"
+                "Ekspor ulang TANPA --no-point-cloud, mis.:\n"
+                "  python scripts/export_minari_kitchen_to_flowpolicy_zarr.py \\\n"
+                "    --out FlowPolicy/data/kitchen_complete_from_minari.zarr \\\n"
+                "    --minari-id D4RL/kitchen/complete-v2 --device cuda:0 --sampling fps"
+            )
+
+        self.replay_buffer = ReplayBuffer.copy_from_path(
+            zarr_path, keys=["state", "action", "point_cloud"]
+        )
         n_eps = self.replay_buffer.n_episodes
         self._explicit_val_indices: Optional[List[int]] = None
         profile = (preprocessing_profile or "minimal").lower()
@@ -172,10 +219,9 @@ class KitchenDataset(BaseDataset):
     def get_normalizer(self, mode="limits", **kwargs):
         data = {
             "action": self.replay_buffer["action"],
-            "agent_pos": self.replay_buffer["state"][..., :],
+            "agent_pos": self.replay_buffer["state"][..., :_AGENT_POS_DIM],
+            "point_cloud": self.replay_buffer["point_cloud"],
         }
-        if self._has_point_cloud:
-            data["point_cloud"] = self.replay_buffer["point_cloud"]
         normalizer = LinearNormalizer()
         normalizer.fit(data=data, last_n_dims=1, mode=mode, **kwargs)
         return normalizer
@@ -184,25 +230,41 @@ class KitchenDataset(BaseDataset):
         return len(self.sampler)
 
     def _sample_to_data(self, sample):
-        agent_pos = sample["state"][:,].astype(np.float32)
-        obs = {"agent_pos": agent_pos}
-        if self._has_point_cloud:
-            obs["point_cloud"] = sample["point_cloud"][:,].astype(np.float32)
-        data = {"obs": obs, "action": sample["action"].astype(np.float32)}
+        agent_pos = sample["state"][:, :_AGENT_POS_DIM].astype(np.float32)
+        point_cloud = sample["point_cloud"][:,].astype(np.float32)
+        data = {
+            "obs": {
+                "point_cloud": point_cloud,
+                "agent_pos": agent_pos,
+            },
+            "action": sample["action"].astype(np.float32),
+        }
         return data
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         sample = self.sampler.sample_sequence(idx)
         data = self._sample_to_data(sample)
         torch_data = dict_apply(data, torch.from_numpy)
+        if idx == 0:
+            # #region agent log
+            _debug_log(
+                "B",
+                "kitchen_dataset.py:__getitem__",
+                "first batch obs keys",
+                {
+                    "obs_keys": sorted(torch_data["obs"].keys()),
+                    "agent_pos_shape": list(torch_data["obs"]["agent_pos"].shape),
+                    "point_cloud_shape": list(torch_data["obs"]["point_cloud"].shape),
+                },
+            )
+            # #endregion
         if self._obs_noise_std > 0:
             std = self._obs_noise_std
             ap = torch_data["obs"]["agent_pos"]
             torch_data["obs"]["agent_pos"] = ap + torch.randn_like(ap) * std
-            if "point_cloud" in torch_data["obs"]:
-                pc = torch_data["obs"]["point_cloud"]
-                torch_data["obs"]["point_cloud"] = pc.clone()
-                torch_data["obs"]["point_cloud"][..., :3] = (
-                    pc[..., :3] + torch.randn_like(pc[..., :3]) * std
-                )
+            pc = torch_data["obs"]["point_cloud"]
+            torch_data["obs"]["point_cloud"] = pc.clone()
+            torch_data["obs"]["point_cloud"][..., :3] = (
+                pc[..., :3] + torch.randn_like(pc[..., :3]) * std
+            )
         return torch_data

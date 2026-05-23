@@ -3,10 +3,10 @@
 Orkestrator eksperimen (tanpa k-fold, satu partisi train/val/test):
 
   1) Baseline — hyperparameter default × len(seeds) × len(profiles)
-  2) Pencarian — **random search berpusat di baseline** (menggantikan Hyperband).
+  2) Pencarian — **random search berpusat di baseline**.
 
 Random search berjalan pada **satu seed × satu profile** (default: seed=0,
-profile=minimal) menggunakan ``val_loss`` untuk memilih pemenang.
+profile=standard — sama dengan satu run baseline) menggunakan ``val_loss`` untuk memilih pemenang.
 Setelah selesai, konfigurasi pemenang di-**rerun penuh**
 pada semua ``seeds × profiles`` user (default 3 × 2 = 6 run) dengan training
 + inference + write ``results.csv`` ``status=ok`` — analog baseline.
@@ -14,8 +14,7 @@ pada semua ``seeds × profiles`` user (default 3 × 2 = 6 run) dengan training
 Flag mutually exclusive:
 
 - ``--baseline-only`` — hanya baseline; random search dilewati.
-- ``--search-only`` / ``--hyperband-only`` (alias) — hanya random search + rerun
-  pemenang (skip baseline; butuh ``--zarr-path`` tetap valid).
+- ``--search-only`` — hanya random search + rerun pemenang (skip baseline).
 
 Tanpa flag: jalankan baseline lalu random search berurutan.
 
@@ -57,15 +56,14 @@ from cv_splits import build_single_train_val_split, save_splits  # noqa: E402
 from experiment_constants import (  # noqa: E402
     BASELINE_CFG_IDX,
     CSV_HPARAM_KEYS,
-    HYPERBAND_BEST_CFG_IDX,
     RESULTS_CSV_METRIC_COLUMNS,
-    append_kitchen_policy_hparam_overrides,
+    SEARCH_BEST_CFG_IDX,
     baseline_config_dict,
-    compute_horizon,
     empty_metrics_row,
     metrics_row_from_infer_json,
 )
 from random_search import run_random_search  # noqa: E402
+from train_overrides import build_train_overrides  # noqa: E402
 
 
 def _fmt_hydra_val(v: Any) -> str:
@@ -88,9 +86,8 @@ def load_or_create_config_bundle(
 ) -> Dict[str, Any]:
     """Muat / buat ``configs.json`` (``version: 5``) dengan baseline saja.
 
-    Hyperband menyimpan state-nya di ``hyperband_state.json`` (lihat
-    ``scripts/hyperband_search.py``). File ini hanya menyimpan baseline
-    yang dipakai fase-1 dan re-run pemenang final.
+    Random search menyimpan state di ``random_search_state.json``.
+    File ini hanya menyimpan baseline untuk fase-1 dan re-run pemenang.
     """
     baseline = apply_vram_limits(baseline_config_dict(), max_batch)
 
@@ -120,67 +117,6 @@ def load_or_create_config_bundle(
     with open(configs_path, "w") as f:
         json.dump(bundle, f, indent=2)
     return baseline
-
-
-def build_train_overrides(
-    cfg: Dict[str, Any],
-    *,
-    seed: int,
-    profile: str,
-    train_eps: List[int],
-    val_eps: List[int],
-    run_dir: pathlib.Path,
-    zarr_rel: str,
-    resume_training: bool,
-    checkpoint_every: int,
-    dataloader_num_workers: int,
-    enable_early_stop: bool = True,
-    early_stop_rollout_every: int = 200,
-) -> List[str]:
-    n_obs = int(cfg["n_obs_steps"])
-    n_act = int(cfg["n_action_steps"])
-    hz = compute_horizon(n_obs, n_act)
-    bs = int(cfg["dataloader.batch_size"])
-
-    def il(xs: List[int]) -> str:
-        return "[" + ",".join(str(int(x)) for x in xs) + "]"
-
-    odl: List[str] = [
-        "task=franka_kitchen_complete4",
-        f"task.dataset.zarr_path={zarr_rel}",
-        f"task.dataset.train_episode_indices={il(train_eps)}",
-        f"task.dataset.val_episode_indices={il(val_eps)}",
-        f"task.dataset.preprocessing_profile={profile}",
-        f"training.seed={seed}",
-        f"task.dataset.seed={seed}",
-        "training.compute_val_loss=true",
-        f"training.resume={str(resume_training).lower()}",
-        "checkpoint.save_ckpt=true",
-        f"training.checkpoint_every={checkpoint_every}",
-        "checkpoint.save_last_ckpt=true",
-        "logging.mode=offline",
-        f"hydra.run.dir={run_dir.resolve()}",
-        "hydra.job.chdir=true",
-        f"horizon={hz}",
-        f"n_obs_steps={n_obs}",
-        f"n_action_steps={n_act}",
-        f"dataloader.batch_size={bs}",
-        f"val_dataloader.batch_size={bs}",
-        f"dataloader.num_workers={dataloader_num_workers}",
-        f"val_dataloader.num_workers={dataloader_num_workers}",
-    ]
-    if enable_early_stop:
-        odl.extend(
-            [
-                "training.early_stop.enabled=true",
-                f"training.rollout_every={int(early_stop_rollout_every)}",
-            ]
-        )
-    else:
-        odl.append("training.rollout_every=999999")
-
-    append_kitchen_policy_hparam_overrides(odl, cfg)
-    return odl
 
 
 def row_key_ok_exists(csv_path: pathlib.Path, key: Tuple[int, int, str, int]) -> bool:
@@ -640,7 +576,13 @@ def main():
         "--max-batch-size",
         type=int,
         default=128,
-        help="Plafon batch size (training+val) untuk mengurangi risiko OOM pada VRAM ~16GB.",
+        help="Plafon batch size baseline + rerun pemenang (default 128; VRAM ~16GB).",
+    )
+    ap.add_argument(
+        "--search-max-batch-size",
+        type=int,
+        default=512,
+        help="Plafon batch size khusus fase random search (default 512).",
     )
     ap.add_argument(
         "--dataloader-num-workers",
@@ -800,7 +742,8 @@ def main():
             "    Satu partisi train/val, tanpa k-fold.\n"
             f"    Early stop: {'on' if enable_early_stop else 'off'}, "
             f"rollout_every={args.early_stop_rollout_every}\n"
-            f"    VRAM: max_batch_size={args.max_batch_size}, "
+            f"    VRAM baseline/rerun: max_batch_size={args.max_batch_size}, "
+            f"random search: search_max_batch_size={args.search_max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
         )
     elif search_only:
@@ -813,7 +756,8 @@ def main():
             f"sigma={args.random_search_sigma}\n"
             f"    Early stop random search: {'on' if enable_early_stop else 'off'}, "
             f"rollout_every={args.early_stop_rollout_every}\n"
-            f"    VRAM: max_batch_size={args.max_batch_size}, "
+            f"    VRAM baseline/rerun: max_batch_size={args.max_batch_size}, "
+            f"random search: search_max_batch_size={args.search_max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
         )
     else:
@@ -826,7 +770,8 @@ def main():
             f"seed={args.random_search_seed}, sigma={args.random_search_sigma}\n"
             f"    Early stop: {'on' if enable_early_stop else 'off'}, "
             f"rollout_every={args.early_stop_rollout_every}\n"
-            f"    VRAM: max_batch_size={args.max_batch_size}, "
+            f"    VRAM baseline/rerun: max_batch_size={args.max_batch_size}, "
+            f"random search: search_max_batch_size={args.search_max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
         )
 
@@ -839,8 +784,8 @@ def main():
                 for profile in args.profiles:
                     if cfg_idx == BASELINE_CFG_IDX:
                         run_name = f"baseline_seed{seed}_{profile}"
-                    elif cfg_idx == HYPERBAND_BEST_CFG_IDX:
-                        run_name = f"hb_best_seed{seed}_{profile}"
+                    elif cfg_idx == SEARCH_BEST_CFG_IDX:
+                        run_name = f"search_best_seed{seed}_{profile}"
                     else:
                         run_name = f"cfg{cfg_idx}_seed{seed}_{profile}"
                     execute_one_job(
@@ -872,7 +817,7 @@ def main():
 
     def run_random_search_phase() -> None:
         """Jalankan random search (single seed × single profile), lalu rerun top-1
-        pemenang pada full ``seeds × profiles`` (cfg_idx=``HYPERBAND_BEST_CFG_IDX``)."""
+        pemenang pada full ``seeds × profiles`` (cfg_idx=``SEARCH_BEST_CFG_IDX``)."""
         best = run_random_search(
             out_root=out_root,
             runs_root=runs_root,
@@ -889,7 +834,7 @@ def main():
             train_py=train_py,
             cwd_train=cwd_train,
             apply_vram_limits_fn=apply_vram_limits,
-            max_batch_size=args.max_batch_size,
+            max_batch_size=args.search_max_batch_size,
             center_hparams=baseline_cfg,
             sigma=float(args.random_search_sigma),
             p_exact_baseline=float(args.random_search_p_exact_baseline),
@@ -903,10 +848,10 @@ def main():
             return
 
         winner_cfg: Dict[str, Any] = dict(best["hparams"])
-        winner_cfg["cfg_idx"] = HYPERBAND_BEST_CFG_IDX
+        winner_cfg["cfg_idx"] = SEARCH_BEST_CFG_IDX
         winner_cfg = apply_vram_limits(winner_cfg, args.max_batch_size)
         print(
-            f"\n>>> Rerun pemenang random search (cfg_idx={HYPERBAND_BEST_CFG_IDX}) "
+            f"\n>>> Rerun pemenang random search (cfg_idx={SEARCH_BEST_CFG_IDX}) "
             f"pada {len(args.seeds)} seeds × {len(args.profiles)} profiles "
             f"@ training.num_epochs={int(winner_cfg['training.num_epochs'])}.\n"
         )

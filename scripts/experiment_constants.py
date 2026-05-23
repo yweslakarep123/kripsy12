@@ -21,23 +21,42 @@ def fmt_hydra_val(v: Any) -> str:
     return str(v)
 
 
+KITCHEN_NUM_POINTS = 512
+
+# Early stop: success total, level k1–k4, dan per sub-tugas Kitchen sequential.
+EARLY_STOP_MONITOR_KEYS: List[str] = [
+    "success_rate_total",
+    "success_rate_k1",
+    "success_rate_k2",
+    "success_rate_k3",
+    "success_rate_k4",
+    "success_rate_task_microwave",
+    "success_rate_task_kettle",
+    "success_rate_task_light_switch",
+    "success_rate_task_slide_cabinet",
+]
+
+# Plafon batch size random search (baseline tetap pakai --max-batch-size default 128).
+SEARCH_DEFAULT_MAX_BATCH_SIZE = 512
+
+
 def append_kitchen_policy_hparam_overrides(
     odl: List[str],
     cfg: Dict[str, Any],
 ) -> None:
-    """Override Hydra untuk Franka Kitchen: state encoder + ruang ``SEARCH_SPACE``.
+    """Override Hydra untuk Franka Kitchen point-cloud + ruang pencarian.
 
-    Selalu memaksa ``obs_encoder_type=state`` (59-dim, tanpa PointNet) seperti
-    ``franka_kitchen_complete4``. ``_state_mlp_hidden`` → ``encoder_output_dim``;
-    hidden MLP state encoder mengikuti ``state_encoder_cfg`` task (default [256,256]).
+    Memaksa ``obs_encoder_type=pointnet``, ``obs_mode=point_cloud``, dan
+    ``num_points=512`` selaras ``franka_kitchen_complete4``.
+    ``_state_mlp_hidden`` → ``policy.encoder_output_dim`` (keluaran PointNet).
     """
-    odl.append("policy.obs_encoder_type=state")
-    odl.append("task.env_runner.obs_mode=state")
+    odl.append("policy.obs_encoder_type=pointnet")
+    odl.append("task.env_runner.obs_mode=point_cloud")
+    odl.append(f"task.env_runner.num_points={KITCHEN_NUM_POINTS}")
     for k in CSV_HPARAM_KEYS:
         if k in ("cfg_idx", "training.num_epochs"):
             continue
         if k == "_state_mlp_hidden":
-            # Ukuran keluaran StateFlowPolicyEncoder; hidden MLP dari task YAML [256,256].
             odl.append(f"policy.encoder_output_dim={int(cfg[k])}")
             continue
         odl.append(f"{k}={fmt_hydra_val(cfg[k])}")
@@ -67,7 +86,7 @@ HYPERBAND_CFG_IDX_BASE = SEARCH_CFG_IDX_BASE
 LOCAL_SEARCH_SPACE: Dict[str, List[Any]] = {
     "training.num_epochs": [1000, 2000, 2500, 3000, 3500, 4000, 5000],
     "optimizer.lr": [5e-5, 1e-4, 2e-4, 5e-4],
-    "dataloader.batch_size": [64, 128, 256],
+    "dataloader.batch_size": [64, 128, 256, 512],
     "policy.Conditional_ConsistencyFM.num_segments": [1, 2, 3],
     "policy.Conditional_ConsistencyFM.eps": [1e-3, 1e-2, 5e-2],
     "policy.Conditional_ConsistencyFM.delta": [1e-3, 1e-2, 5e-2],
@@ -96,7 +115,7 @@ HYPERBAND_DEFAULT_MAX_EPOCHS = 3000
 HYPERBAND_DEFAULT_FACTOR = 3
 HYPERBAND_DEFAULT_ITERATIONS = 1
 
-CSV_HPARAM_KEYS: List[str] = ["training.num_epochs"] + list(SEARCH_SPACE.keys())
+CSV_HPARAM_KEYS: List[str] = list(LOCAL_SEARCH_SPACE.keys())
 
 
 def compute_horizon(n_obs_steps: int, n_action_steps: int) -> int:
