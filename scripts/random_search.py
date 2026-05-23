@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Random search berpusat di baseline untuk hiperparameter FlowPolicy Kitchen.
 
-Menggantikan Hyperband: setiap trial dilatih penuh sampai ``training.num_epochs``
-(yang disample dari ``LOCAL_SEARCH_SPACE`` dengan bobot di sekitar baseline).
-Pemenang dipilih berdasarkan ``val_loss_final`` terkecil (sama seperti sinyal
-Hyperband). State persisten: ``<output-dir>/random_search_state.json``.
+Setiap trial dilatih dengan override Hydra **identik** baseline
+(``train_overrides.build_train_overrides``). Pemenang = ``val_loss_final``
+terkecil. State: ``<output-dir>/random_search_state.json``.
 """
 
 from __future__ import annotations
@@ -28,9 +27,9 @@ from experiment_constants import (  # noqa: E402
     SEARCH_CFG_IDX_BASE,
     sample_configs_around_baseline,
 )
-from hyperband_search import (  # noqa: E402
-    _evaluate_config_at_rung,
-    _run_dir_for_cfg,
+from search_training import (  # noqa: E402
+    run_dir_for_search_cfg,
+    run_search_trial_training,
 )
 
 
@@ -148,6 +147,35 @@ def run_random_search(
             p_exact_baseline=p_exact_baseline,
         )
         cfgs = [apply_vram_limits_fn(c, max_batch_size) for c in cfgs]
+        # #region agent log
+        import json
+        import time
+
+        try:
+            with open(
+                "/home/daffa/Documents/kripsy12/.cursor/debug-ebd6f9.log", "a"
+            ) as _f:
+                _f.write(
+                    json.dumps(
+                        {
+                            "sessionId": "ebd6f9",
+                            "hypothesisId": "BS",
+                            "location": "random_search.py:run_random_search",
+                            "message": "vram limits applied to search trials",
+                            "data": {
+                                "search_max_batch_size": int(max_batch_size),
+                                "trial_batch_sizes": [
+                                    int(c["dataloader.batch_size"]) for c in cfgs[:5]
+                                ],
+                            },
+                            "timestamp": int(time.time() * 1000),
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+        # #endregion
         configs_state = []
         for cfg in cfgs:
             configs_state.append(
@@ -159,7 +187,7 @@ def run_random_search(
                 }
             )
         state = {
-            "version": 1,
+            "version": 2,
             "algorithm": "random_search_around_baseline",
             "n_trials": n_trials,
             "sampling_seed": int(sampling_seed),
@@ -180,23 +208,15 @@ def run_random_search(
         cfg_idx = int(cstate["cfg_idx"])
         cfg = dict(cstate["hparams"])
         cfg["cfg_idx"] = cfg_idx
-        run_dir = _run_dir_for_cfg(
+        run_dir = run_dir_for_search_cfg(
             runs_root, cfg_idx, search_train_seed, search_profile
         )
-        target_epochs = int(cfg["training.num_epochs"])
-        already_trained = int(cstate.get("epoch_trained", 0))
 
         if cstate.get("done") and (run_dir / "training_final.json").is_file():
             continue
 
-        if already_trained >= target_epochs and (run_dir / "training_final.json").is_file():
-            cstate["done"] = True
-            continue
-
-        val_loss, rc, epoch_trained = _evaluate_config_at_rung(
+        val_loss, rc, epoch_trained = run_search_trial_training(
             cfg=cfg,
-            target_epoch=target_epochs,
-            already_trained=already_trained,
             run_dir=run_dir,
             py=py,
             train_py=train_py,

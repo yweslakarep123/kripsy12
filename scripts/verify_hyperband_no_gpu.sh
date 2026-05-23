@@ -50,11 +50,11 @@ cfg = {"cfg_idx": 1000, "training.num_epochs": 0, "optimizer.lr": 1e-4,
 odl = _build_train_overrides_hb(cfg, seed=0, profile="standard", train_eps=[0], val_eps=[1],
     run_dir=pathlib.Path("/tmp/hb"), zarr_rel="x.zarr", resume_training=False,
     delta_num_epochs=3, checkpoint_every=1, dataloader_num_workers=0)
-assert "policy.obs_encoder_type=state" in odl
-assert "task.env_runner.obs_mode=state" in odl
+assert "policy.obs_encoder_type=pointnet" in odl
+assert "task.env_runner.obs_mode=point_cloud" in odl
+assert "task.env_runner.num_points=512" in odl
 assert "policy.encoder_output_dim=256" in odl
-assert not any("point_cloud" in x for x in odl)
-print("OK: override Hydra memakai state encoder")
+print("OK: override Hydra memakai point cloud (512 pts)")
 
 # Tabel 1 paper R=81 eta=3
 brs = compute_brackets(81, 3)
