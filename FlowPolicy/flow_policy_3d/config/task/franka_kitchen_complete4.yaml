@@ -26,11 +26,13 @@ env_runner:
   device: ${training.device}
   use_point_crop: ${policy.use_point_crop}
   max_steps: 280
-  tasks_to_complete:
+  tasks_to_complete: null
+  task_completion_order:
     - microwave
     - kettle
-    - slide cabinet
     - light switch
+    - slide cabinet
+  terminate_on_tasks_completed: false
 
 dataset:
   _target_: flow_policy_3d.dataset.kitchen_dataset.KitchenDataset

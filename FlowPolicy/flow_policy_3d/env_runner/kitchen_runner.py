@@ -20,13 +20,17 @@ from termcolor import cprint
 
 
 class KitchenRunner(BaseRunner):
-    """Urutan sub-tugas untuk metrik success_rate_k1…k4 (Kitchen-Complete)."""
+    """Urutan sub-tugas untuk metrik success_rate_k1…k4 (Kitchen sequential)."""
 
-    K_LEVEL_SPECS = (
-        frozenset({"microwave"}),
-        frozenset({"microwave", "light switch"}),
-        frozenset({"microwave", "light switch", "kettle"}),
-        frozenset({"microwave", "light switch", "kettle", "slide cabinet"}),
+    TASK_ORDER = (
+        "microwave",
+        "kettle",
+        "light switch",
+        "slide cabinet",
+    )
+
+    K_LEVEL_SPECS = tuple(
+        frozenset(TASK_ORDER[: i + 1]) for i in range(len(TASK_ORDER))
     )
 
     def __init__(
@@ -200,6 +204,7 @@ class KitchenRunner(BaseRunner):
         current_ep_lat_ms.clear()
 
         ep_success_levels = []
+        per_task_hits = {t: [] for t in self.TASK_ORDER}
         per_episode_mean_inference_latency_ms: list[float] = []
         n_eps = int(self.eval_episodes if n_episodes is None else n_episodes)
         video_root = (
@@ -243,6 +248,8 @@ class KitchenRunner(BaseRunner):
                 spec.issubset(last_completions) for spec in self.K_LEVEL_SPECS
             ]
             ep_success_levels.append(levels_met)
+            for task in self.TASK_ORDER:
+                per_task_hits[task].append(float(task in last_completions))
 
             ep_mean = (
                 float(np.mean(current_ep_lat_ms)) if current_ep_lat_ms else 0.0
@@ -270,13 +277,19 @@ class KitchenRunner(BaseRunner):
             "success_rate_k2": float(sr[:, 1].mean() * 100.0),
             "success_rate_k3": float(sr[:, 2].mean() * 100.0),
             "success_rate_k4": float(sr[:, 3].mean() * 100.0),
+        }
+        for task in self.TASK_ORDER:
+            key = f"success_rate_task_{task.replace(' ', '_')}"
+            hits = per_task_hits[task]
+            out[key] = float(np.mean(hits) * 100.0) if hits else 0.0
+        out.update({
             "mean_inference_latency_ms": mean_lat,
             "std_inference_latency_ms": std_lat,
             "per_episode_mean_inference_latency_ms": per_episode_mean_inference_latency_ms,
             "mean_episode_mean_inference_latency_ms": mean_episode_mean_lat,
             "std_episode_mean_inference_latency_ms": std_episode_mean_lat,
             "n_infer_episodes": int(n_eps),
-        }
+        })
         out["trade_off"] = (
             float(out["success_rate_k4"] / mean_lat) if mean_lat > 1e-9 else 0.0
         )

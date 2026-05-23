@@ -340,9 +340,35 @@ class TrainFlowPolicyWorkspace:
         last_epoch_train_loss = None
         last_epoch_val_loss = None
 
+        es_cfg = OmegaConf.select(cfg, "training.early_stop", default=None)
+        early_stop_enabled = bool(
+            es_cfg is not None and OmegaConf.select(es_cfg, "enabled", default=False)
+        )
+        es_patience = int(OmegaConf.select(es_cfg, "patience", default=8))
+        es_min_delta = float(OmegaConf.select(es_cfg, "min_delta", default=0.5))
+        es_min_epochs = int(OmegaConf.select(es_cfg, "min_epochs", default=400))
+        es_eval_episodes = int(OmegaConf.select(es_cfg, "eval_episodes", default=10))
+        es_monitor_keys = list(
+            OmegaConf.select(
+                es_cfg,
+                "monitor_keys",
+                default=[
+                    "success_rate_k1",
+                    "success_rate_k2",
+                    "success_rate_k3",
+                    "success_rate_k4",
+                ],
+            )
+        )
+        es_best: dict[str, float] = {k: float("-inf") for k in es_monitor_keys}
+        es_stale_checks = 0
+        stop_training = False
+
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         for local_epoch_idx in range(cfg.training.num_epochs):
+            if stop_training:
+                break
             step_log = dict()
             # ========= train for this epoch ==========
             train_losses = list()
@@ -419,12 +445,49 @@ class TrainFlowPolicyWorkspace:
             # run rollout
             if (self.epoch % cfg.training.rollout_every) == 0 and RUN_ROLLOUT and env_runner is not None:
                 t3 = time.time()
-                # runner_log = env_runner.run(policy, dataset=dataset)
-                runner_log = env_runner.run(policy)
+                use_task_metrics = early_stop_enabled and hasattr(
+                    env_runner, "run_eval_metrics"
+                )
+                if use_task_metrics:
+                    n_rollout_eps = es_eval_episodes
+                    runner_log = env_runner.run_eval_metrics(
+                        policy,
+                        warmup_predict_steps=5,
+                        eval_seed=int(cfg.training.seed),
+                        log_video=False,
+                        n_episodes=n_rollout_eps,
+                    )
+                    runner_log["mean_success_rates"] = (
+                        runner_log.get("success_rate_k4", 0.0) / 100.0
+                    )
+                    runner_log["test_mean_score"] = runner_log["mean_success_rates"]
+                else:
+                    runner_log = env_runner.run(policy)
                 t4 = time.time()
-                # print(f"rollout time: {t4-t3:.3f}")
-                # log all
                 step_log.update(runner_log)
+
+                if early_stop_enabled and use_task_metrics and self.epoch >= es_min_epochs:
+                    improved_any = False
+                    for mk in es_monitor_keys:
+                        cur = float(runner_log.get(mk, float("-inf")))
+                        step_log[f"early_stop_{mk}"] = cur
+                        if cur >= es_best.get(mk, float("-inf")) + es_min_delta:
+                            es_best[mk] = cur
+                            improved_any = True
+                    if improved_any:
+                        es_stale_checks = 0
+                    else:
+                        es_stale_checks += 1
+                    step_log["early_stop_stale_checks"] = es_stale_checks
+                    if es_stale_checks >= es_patience:
+                        cprint(
+                            f"[early_stop] Berhenti di epoch {self.epoch}: "
+                            f"tidak ada peningkatan {es_monitor_keys} "
+                            f"(patience={es_patience}, min_delta={es_min_delta}). "
+                            f"Terbaik: {es_best}",
+                            "yellow",
+                        )
+                        stop_training = True
 
             
                 
@@ -571,6 +634,13 @@ class TrainFlowPolicyWorkspace:
             "train_loss_final": last_epoch_train_loss,
             "val_loss_final": last_epoch_val_loss,
         }
+        if early_stop_enabled:
+            final_metrics["early_stop"] = {
+                "triggered": bool(stop_training),
+                "best_monitor_values": dict(es_best),
+                "stale_checks": es_stale_checks,
+                "stopped_at_epoch": int(self.epoch),
+            }
         with open(os.path.join(self.output_dir, "training_final.json"), "w") as f:
             json.dump(final_metrics, f, indent=2)
 
