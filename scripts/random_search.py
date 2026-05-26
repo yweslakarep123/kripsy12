@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Random search berpusat di baseline untuk hiperparameter FlowPolicy Kitchen.
 
-Setiap trial dilatih dengan override Hydra **identik** baseline
-(``train_overrides.build_train_overrides``). Pemenang = ``val_loss_final``
-terkecil. State: ``<output-dir>/random_search_state.json``.
+Setiap trial dilatih + inferensi (override Hydra identik baseline).
+Pemenang = ``test_success_rate_total`` terbesar.
+State per fase: ``random_search_state_epoch5000.json`` / ``..._epoch3000.json``.
 """
 
 from __future__ import annotations
@@ -24,21 +24,25 @@ if str(SCRIPT_DIR) not in sys.path:
 from experiment_constants import (  # noqa: E402
     CSV_HPARAM_KEYS,
     DEFAULT_BASELINE_HPARAMS,
-    SEARCH_CFG_IDX_BASE,
+    EPOCH_SEARCH_CFG_IDX_BASE,
+    EPOCH_SEARCH_STATE_FILES,
     sample_configs_around_baseline,
 )
 from search_training import (  # noqa: E402
     run_dir_for_search_cfg,
-    run_search_trial_training,
+    run_search_trial,
 )
 
 
-def _state_path(out_root: pathlib.Path) -> pathlib.Path:
-    return out_root / "random_search_state.json"
+def _state_path(out_root: pathlib.Path, epoch_mode: str) -> pathlib.Path:
+    fname = EPOCH_SEARCH_STATE_FILES.get(
+        epoch_mode, f"random_search_state_{epoch_mode}.json"
+    )
+    return out_root / fname
 
 
-def _load_state(out_root: pathlib.Path) -> Optional[Dict[str, Any]]:
-    p = _state_path(out_root)
+def _load_state(out_root: pathlib.Path, epoch_mode: str) -> Optional[Dict[str, Any]]:
+    p = _state_path(out_root, epoch_mode)
     if not p.is_file():
         return None
     try:
@@ -48,8 +52,8 @@ def _load_state(out_root: pathlib.Path) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _save_state(out_root: pathlib.Path, state: Dict[str, Any]) -> None:
-    p = _state_path(out_root)
+def _save_state(out_root: pathlib.Path, epoch_mode: str, state: Dict[str, Any]) -> None:
+    p = _state_path(out_root, epoch_mode)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".json.tmp")
     with open(tmp, "w") as f:
@@ -63,20 +67,20 @@ def _pick_best_from_state(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     def keyfn(e: Dict[str, Any]) -> float:
-        v = e.get("val_loss")
+        v = e.get("test_success_rate_total")
         if v is None:
-            return float("inf")
+            return float("-inf")
         try:
             vf = float(v)
         except (TypeError, ValueError):
-            return float("inf")
+            return float("-inf")
         if math.isnan(vf) or math.isinf(vf):
-            return float("inf")
+            return float("-inf")
         return vf
 
-    ordered = sorted(evals, key=keyfn)
+    ordered = sorted(evals, key=keyfn, reverse=True)
     best = ordered[0]
-    if keyfn(best) == float("inf"):
+    if keyfn(best) == float("-inf"):
         return None
 
     cfg_idx = int(best["cfg_idx"])
@@ -85,7 +89,8 @@ def _pick_best_from_state(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return {
                 "cfg_idx": cfg_idx,
                 "hparams": dict(cstate["hparams"]),
-                "val_loss": float(best["val_loss"]),
+                "test_success_rate_total": float(best["test_success_rate_total"]),
+                "val_loss": best.get("val_loss"),
             }
     return None
 
@@ -105,6 +110,7 @@ def run_random_search(
     dataloader_num_workers: int,
     py: str,
     train_py: pathlib.Path,
+    infer_py: pathlib.Path,
     cwd_train: str,
     apply_vram_limits_fn: Callable[[Dict[str, Any], int], Dict[str, Any]],
     max_batch_size: int,
@@ -113,15 +119,24 @@ def run_random_search(
     p_exact_baseline: float = 0.15,
     enable_early_stop: bool = True,
     early_stop_rollout_every: int = 200,
+    epoch_mode: str = "epoch_5000",
+    results_csv: Optional[pathlib.Path] = None,
+    hp_cols: Optional[List[str]] = None,
+    fold_i: int = 0,
+    n_infer_episodes: int = 50,
+    n_train_val_episodes: int = 15,
+    train_val_eval_seed_offset: int = 31,
+    skip_inference_videos: bool = False,
 ) -> Optional[Dict[str, Any]]:
-    """Jalankan random search dan kembalikan konfigurasi pemenang."""
+    """Jalankan random search satu fase dan kembalikan konfigurasi pemenang."""
     out_root = pathlib.Path(out_root).resolve()
     runs_root = pathlib.Path(runs_root).resolve()
     runs_root.mkdir(parents=True, exist_ok=True)
     n_trials = int(n_trials)
     center = center_hparams or dict(DEFAULT_BASELINE_HPARAMS)
+    cfg_idx_base = EPOCH_SEARCH_CFG_IDX_BASE.get(epoch_mode, 1000)
 
-    state = _load_state(out_root)
+    state = _load_state(out_root, epoch_mode)
     reuse = False
     if state is not None:
         reuse = (
@@ -129,10 +144,11 @@ def run_random_search(
             and int(state.get("sampling_seed", -1)) == int(sampling_seed)
             and int(state.get("search_train_seed", -1)) == int(search_train_seed)
             and str(state.get("search_profile", "")) == str(search_profile)
+            and str(state.get("epoch_mode", "")) == str(epoch_mode)
         )
         if not reuse:
             print(
-                "[random_search] parameter berubah vs random_search_state.json — "
+                f"[random_search:{epoch_mode}] parameter berubah vs state — "
                 "membuat state baru."
             )
 
@@ -142,40 +158,12 @@ def run_random_search(
             rng,
             n_trials,
             center=center,
-            base_cfg_idx=SEARCH_CFG_IDX_BASE,
+            base_cfg_idx=cfg_idx_base,
             sigma=sigma,
             p_exact_baseline=p_exact_baseline,
+            epoch_mode=epoch_mode,
         )
         cfgs = [apply_vram_limits_fn(c, max_batch_size) for c in cfgs]
-        # #region agent log
-        import json
-        import time
-
-        try:
-            with open(
-                "/home/daffa/Documents/kripsy12/.cursor/debug-ebd6f9.log", "a"
-            ) as _f:
-                _f.write(
-                    json.dumps(
-                        {
-                            "sessionId": "ebd6f9",
-                            "hypothesisId": "BS",
-                            "location": "random_search.py:run_random_search",
-                            "message": "vram limits applied to search trials",
-                            "data": {
-                                "search_max_batch_size": int(max_batch_size),
-                                "trial_batch_sizes": [
-                                    int(c["dataloader.batch_size"]) for c in cfgs[:5]
-                                ],
-                            },
-                            "timestamp": int(time.time() * 1000),
-                        }
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
-        # #endregion
         configs_state = []
         for cfg in cfgs:
             configs_state.append(
@@ -187,8 +175,9 @@ def run_random_search(
                 }
             )
         state = {
-            "version": 2,
+            "version": 3,
             "algorithm": "random_search_around_baseline",
+            "epoch_mode": str(epoch_mode),
             "n_trials": n_trials,
             "sampling_seed": int(sampling_seed),
             "search_train_seed": int(search_train_seed),
@@ -200,7 +189,7 @@ def run_random_search(
             "evaluations": [],
             "best": None,
         }
-        _save_state(out_root, state)
+        _save_state(out_root, epoch_mode, state)
 
     for cstate in state["configs"]:
         if cstate.get("done"):
@@ -212,14 +201,15 @@ def run_random_search(
             runs_root, cfg_idx, search_train_seed, search_profile
         )
 
-        if cstate.get("done") and (run_dir / "training_final.json").is_file():
+        if cstate.get("done") and (run_dir / "metrics.json").is_file():
             continue
 
-        val_loss, rc, epoch_trained = run_search_trial_training(
+        success_rate, val_loss, rc, epoch_trained = run_search_trial(
             cfg=cfg,
             run_dir=run_dir,
             py=py,
             train_py=train_py,
+            infer_py=infer_py,
             cwd_train=cwd_train,
             seed=search_train_seed,
             profile=search_profile,
@@ -230,6 +220,13 @@ def run_random_search(
             dataloader_num_workers=dataloader_num_workers,
             enable_early_stop=enable_early_stop,
             early_stop_rollout_every=early_stop_rollout_every,
+            results_csv=results_csv,
+            hp_cols=hp_cols,
+            fold_i=fold_i,
+            n_infer_episodes=n_infer_episodes,
+            n_train_val_episodes=n_train_val_episodes,
+            train_val_eval_seed_offset=train_val_eval_seed_offset,
+            skip_inference_videos=skip_inference_videos,
         )
         if rc == 0:
             cstate["epoch_trained"] = int(epoch_trained)
@@ -237,22 +234,23 @@ def run_random_search(
         state["evaluations"].append(
             {
                 "cfg_idx": cfg_idx,
+                "test_success_rate_total": success_rate,
                 "val_loss": val_loss,
                 "returncode": rc,
             }
         )
-        _save_state(out_root, state)
+        _save_state(out_root, epoch_mode, state)
         print(
-            f"[random_search] cfg_idx={cfg_idx} selesai "
-            f"val_loss={val_loss} rc={rc}"
+            f"[random_search:{epoch_mode}] cfg_idx={cfg_idx} selesai "
+            f"success_rate={success_rate} val_loss={val_loss} rc={rc}"
         )
 
     best = _pick_best_from_state(state)
     if best is not None:
         state["best"] = best
-        _save_state(out_root, state)
+        _save_state(out_root, epoch_mode, state)
         print(
-            f"[random_search] pemenang cfg_idx={best['cfg_idx']} "
-            f"val_loss={best['val_loss']:.6f}"
+            f"[random_search:{epoch_mode}] pemenang cfg_idx={best['cfg_idx']} "
+            f"success_rate={best['test_success_rate_total']:.4f}"
         )
     return best
