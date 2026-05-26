@@ -9,8 +9,8 @@ Struktur repositori:
 ├── scripts/                # orkestrator eksperimen (baseline + random search)
 │   ├── run_experiment.py
 │   ├── run_experiment.sh         # pintasan CLI: baseline lalu random search
-│   ├── run_baseline_only.sh      # hanya baseline (6 run default)
-│   ├── run_hyperband_only.sh     # hanya random search + rerun pemenang (nama legacy)
+│   ├── run_baseline_only.sh      # hanya baseline (3 seed, profil minimal)
+│   ├── run_hyperband_only.sh     # hanya dua fase random search (nama legacy)
 │   ├── run_hyperband_laptop_smoke.sh   # smoke test random search (laptop)
 │   ├── verify_hyperband_no_gpu.sh      # cek logika Hyperband lama (tanpa GPU)
 │   ├── random_search.py          # random search berpusat di baseline
@@ -121,11 +121,11 @@ Jadikan skrip shell dapat dieksekusi (sekali saja):
 chmod +x scripts/*.sh
 ```
 
-### Random search saja (profil **minimal**, disarankan)
+### Random search saja (profil **minimal**)
 
-Fase pencarian hiperparameter memakai **satu seed × profil `minimal`** (tanpa augmentasi observasi), dengan **early stopping** aktif (eval simulasi Kitchen setiap 200 epoch). Pemenang (`val_loss` terkecil) di-rerun penuh (train + inferensi) pada `--seeds × --profiles`.
+Dua fase pencarian hiperparameter berpusat di baseline: **epoch~5000** (10 trial) lalu **epoch~3000** (10 trial). Setiap trial: **train + inferensi + `results.csv`**. Seed training diambil dari baseline terbaik (`test_success_rate_total`) atau override `--search-train-seed`.
 
-**Skrip pintasan** (default: N=16 trial, search di `seed=0` × `minimal`, rerun di 3 seed × 2 profil):
+**Skrip pintasan** (default: N=10 trial/fase):
 
 ```bash
 conda activate flowpolicy-kitchen
@@ -143,39 +143,29 @@ python scripts/run_experiment.py \
   --search-only \
   --output-dir outputs/search_only \
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
-  --random-search-n 16 \
+  --random-search-n 10 \
   --random-search-seed 99 \
   --random-search-sigma 1.0 \
   --search-train-seed 0 \
-  --search-profile minimal \
   --seeds 0 42 101 \
-  --profiles standard minimal \
   --early-stop-rollout-every 200 \
   --max-batch-size 128 \
   --dataloader-num-workers 4 \
   --cv-seed 12345
 ```
 
-**Hanya profil `minimal` di seluruh pipeline** (search + baseline/rerun), tambahkan:
-
-```bash
-  --profiles minimal
-```
-
-(pada skrip pintasan, argumen setelah `"$@"` bisa meng-override: `./scripts/run_hyperband_only.sh --profiles minimal`)
-
 | Aspek | Nilai default | Keterangan |
 |-------|---------------|------------|
-| Profil search | `minimal` | `--search-profile minimal` |
-| Seed search | `0` | `--search-train-seed 0` (satu run training per trial) |
-| Trial | `16` | `--random-search-n 16` |
+| Profil | `minimal` | Hardcoded (tanpa augmentasi noise) |
+| Seed search | dari baseline terbaik | `--search-train-seed` untuk override manual |
+| Trial | `10` per fase | `--random-search-n 10` |
 | Early stop | **on** | `--disable-early-stop` untuk mematikan |
 | Rollout eval | setiap **200** epoch | `--early-stop-rollout-every 200` |
-| Sinyal pemenang | `val_loss_final` | dari `training_final.json` per trial |
-| Video MP4 | hanya fase **inferensi** rerun | `runs/.../inference_videos/infer_ep_*.mp4`; eval training tidak menyimpan MP4 |
-| Resume search | `random_search_state.json` | jangan ganti `N`, `--random-search-seed`, `--search-train-seed`, atau `--search-profile` di tengah jalan |
+| Sinyal pemenang | `test_success_rate_total` | dari inferensi per trial |
+| Video MP4 | setiap run | `runs/.../inference_videos/infer_ep_*.mp4` |
+| Resume search | `random_search_state_epoch5000.json` / `..._epoch3000.json` | jangan ganti `N`, `--random-search-seed`, atau `--search-train-seed` di tengah jalan |
 
-Folder trial search: `runs/hb_cfg<idx>_seed0_minimal/` (cfg_idx ≥ 1000). Rerun pemenang: `runs/hb_best_seed<seed>_<profile>/` (`cfg_idx=-3`).
+Folder trial search: `runs/rs_cfg<idx>_seed<seed>_minimal/` (cfg_idx 1000–1009 fase 5000, 2000–2009 fase 3000).
 
 ### Verifikasi logika Hyperband legacy (tanpa GPU, cepat)
 
@@ -195,7 +185,7 @@ conda activate flowpolicy-kitchen
 ./scripts/run_hyperband_laptop_smoke.sh
 ```
 
-Keluaran: `outputs/laptop_hyperband_smoke/` (`random_search_state.json`, `runs/hb_cfg*_seed0_minimal/`).
+Keluaran: `outputs/laptop_hyperband_smoke/` (`random_search_state_epoch5000.json`, `random_search_state_epoch3000.json`, `runs/rs_cfg*_seed0_minimal/`).
 
 Override path keluaran / zarr:
 
@@ -208,9 +198,9 @@ OUTPUT_DIR=outputs/smoke1 ZARR_PATH=FlowPolicy/data/kitchen_complete_from_minari
 
 | Mode | Skrip pintasan | Isi |
 |------|----------------|-----|
-| Baseline + random search + rerun pemenang | `./scripts/run_experiment.sh` | Fase 1→2→3 (default produksi) |
-| **Random search + rerun** (profil search `minimal`) | `./scripts/run_hyperband_only.sh` | Lewati baseline; N=16 trial default |
-| Hanya baseline (6 run) | `./scripts/run_baseline_only.sh` | Lewati random search |
+| Baseline + dua fase random search | `./scripts/run_experiment.sh` | Baseline → pilih seed → search ~5000 → search ~3000 |
+| **Random search saja** | `./scripts/run_hyperband_only.sh` | Lewati baseline; 2 fase × N=10 trial |
+| Hanya baseline (3 run) | `./scripts/run_baseline_only.sh` | Lewati random search |
 | Smoke test laptop | `./scripts/run_hyperband_laptop_smoke.sh` | N kecil, VRAM 8 GB |
 
 **Produksi (default, dari laptop kuat atau Vast.ai):**
@@ -230,7 +220,7 @@ conda activate flowpolicy-kitchen
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
-**Hanya random search (+ rerun top-1 di 3 seed × 2 profil):**
+**Hanya random search (dua fase, 20 trial default):**
 
 ```bash
 ./scripts/run_hyperband_only.sh \
@@ -246,27 +236,26 @@ conda activate flowpolicy-kitchen
 ./scripts/run_hyperband_only.sh \
   --output-dir outputs/search_only \
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
-  --random-search-n 16
+  --random-search-n 10 \
+  --search-train-seed 42
 ```
 
 ### Anggaran waktu (random search)
 
-Asumsi kalibrasi (satu run penuh = **3000 epoch**, **1 seed × 1 profil**, `batch_size` ≤ 128):
+Asumsi kalibrasi (satu run penuh = **3000–5000 epoch**, **1 seed**, profil `minimal`, `batch_size` ≤ 128):
 
 | GPU efektif | Waktu per run penuh | Catatan |
 |-------------|---------------------|---------|
-| **~30 TFLOPS** | ~2,7 jam | Early stop sering menghentikan lebih awal |
-| **~100 TFLOPS** | ~0,8 jam | |
+| **~30 TFLOPS** | ~2,7 jam (3000 ep) | Early stop sering menghentikan lebih awal |
+| **~100 TFLOPS** | ~0,8 jam (3000 ep) | |
 
-**Fase random search (default):** `N=16` trial × **1 seed × profil `minimal`**. Setiap trial dilatih sampai `training.num_epochs` (default 3000) atau berhenti lebih awal via early stop. Perkiraan kasar: `16 × waktu_per_run` (bisa jauh lebih sedikit jika early stop aktif).
-
-**Fase rerun pemenang:** **6 run** (3 seed × 2 profil) train + inferensi penuh.
+**Fase random search (default):** `N=10` trial × **2 fase** (epoch~5000 lalu epoch~3000) × **1 seed**. Setiap trial train + inferensi. Perkiraan kasar: `20 × waktu_per_run` (fase 5000 lebih lama).
 
 **Kalibrasi wajib di mesin Anda:** jalankan satu trial search atau satu baseline, hitung jam untuk satu run, lalu skala.
 
 #### Resume
 
-Jalankan ulang **perintah yang sama** dengan `--output-dir` yang sama; random search melanjutkan dari `random_search_state.json`. Jangan ganti `--random-search-n`, `--random-search-seed`, `--search-train-seed`, atau `--search-profile` di tengah jalan.
+Jalankan ulang **perintah yang sama** dengan `--output-dir` yang sama; random search melanjutkan dari `random_search_state_epoch5000.json` / `random_search_state_epoch3000.json`. Jangan ganti `--random-search-n`, `--random-search-seed`, atau `--search-train-seed` di tengah jalan.
 
 #### Laptop 8 GB — knob VRAM (tambahkan ke perintah di atas)
 
@@ -300,7 +289,7 @@ Contoh random search di laptop 8 GB (lambat; disarankan smoke test dulu):
 
 ### Melanjutkan eksperimen / folder baru
 
-Jalankan ulang perintah yang sama di `--output-dir` yang sama — job selesai (`metrics.json` atau `status=ok` di CSV) dilewati; random search melanjutkan dari `random_search_state.json`.
+Jalankan ulang perintah yang sama di `--output-dir` yang sama — job selesai (`metrics.json` atau `status=ok` di CSV) dilewati; random search melanjutkan dari state per fase.
 
 Mulai dari nol (folder baru):
 
@@ -310,7 +299,7 @@ mkdir -p outputs/experiment_fresh
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr
 ```
 
-Hapus manual isi folder lama jika ingin train ulang semua di path yang sama: `runs/`, `results.csv`, `configs.json`, `random_search_state.json`, `cv_splits.json`.
+Hapus manual isi folder lama jika ingin train ulang semua di path yang sama: `runs/`, `results.csv`, `configs.json`, `random_search_state_epoch5000.json`, `random_search_state_epoch3000.json`, `experiment_meta.json`, `cv_splits.json`.
 
 ### Agregasi dan plot (tanpa training ulang)
 
@@ -390,29 +379,28 @@ Checkpoint dan log Hydra biasanya di bawah `FlowPolicy/data/outputs/` (atau sesu
 
 Pelatihan **tidak** memakai validasi silang berlipat (k-fold). Episode dibagi **sekali** menjadi train / validation / test (`scripts/cv_splits.py`): satu partisi tetap, dapat direproduksi dengan `--cv-seed`.
 
-Skrip **`scripts/run_experiment.py`** menjalankan tiga fase **berurutan**:
+Skrip **`scripts/run_experiment.py`** menjalankan empat langkah **berurutan**:
 
 | Fase | Isi | Jumlah run (default) |
 |------|-----|------------------------|
-| **1. Baseline** | Hyperparameter default FlowPolicy (`experiment_constants.DEFAULT_BASELINE_HPARAMS`) × **3 seed** × **2 profil preprocessing** | **6** |
-| **2. Random search** | `N` trial (default **16**) disampling di sekitar baseline; setiap trial dilatih **1 seed × 1 profil** (`--search-train-seed 0`, `--search-profile minimal`). Sinyal pemenang = **`val_loss_final` terkecil**. Early stop aktif (eval simulasi tiap 200 epoch). State: `random_search_state.json`. | **16** trial (tidak ditulis ke `results.csv`) |
-| **3. Rerun pemenang** | Konfigurasi pemenang di-rerun **penuh** (train + infer + `results.csv` `status=ok`) pada **3 seed × 2 profil**. Baris CSV: `cfg_idx = -3`. | **6** |
+| **1. Baseline** | Hyperparameter default × **3 seed** × profil **`minimal`** (train + infer + CSV) | **3** |
+| **2. Pilih seed** | Seed dengan **`test_success_rate_total`** tertinggi dari baseline | — |
+| **3. Random search ~5000** | `N` trial (default **10**) near baseline HP, epoch `[4500,5000,5500]`, seed terpilih | **10** |
+| **4. Random search ~3000** | `N` trial (default **10**) near baseline HP, epoch `[2500,3000,3500]`, seed sama | **10** |
 
-**Total default:** 6 baseline + 16 trial search + 6 rerun = **12 run tercatat di `results.csv`** + evaluasi intermediate search di `random_search_state.json`.
-
-Profil preprocessing: **`standard`** (augmentasi/noise observasi) dan **`minimal`** (tanpa augmentasi). **Fase search default memakai `minimal` saja**; baseline dan rerun tetap bisa keduanya lewat `--profiles`.
+**Total default:** **23 run** tercatat di `results.csv` (3 + 10 + 10). Profil preprocessing: **`minimal`** saja (tanpa augmentasi noise observasi).
 
 ### Random search singkat
 
-- **`--random-search-n`**: jumlah trial (default 16).
+- **`--random-search-n`**: jumlah trial **per fase** (default 10).
 - **`--random-search-seed`**: seed RNG sampling konfigurasi (default 99).
 - **`--random-search-sigma`**: lebar sampling Gaussian di sekitar baseline (default 1.0).
-- **`--search-train-seed`** / **`--search-profile`**: seed dan profil **satu-satunya** dipakai saat melatih setiap trial (default `0` × **`minimal`**).
-- Setiap trial dilatih penuh hingga `training.num_epochs` (dari config, default 3000) atau berhenti lebih awal via **early stopping** (monitor `success_rate_k1…k4` di simulasi).
-- Sinyal `val_loss` dari `training_final.json.val_loss_final` (`training.compute_val_loss=true`).
-- **Inferensi rollout + MP4** hanya pada fase **baseline / rerun pemenang**, bukan selama trial search.
+- **`--search-train-seed`**: override seed training search; default = seed baseline terbaik dari `results.csv`.
+- Setiap trial: train + inferensi + baris `results.csv` (`status=ok`).
+- Pemenang per fase = **`test_success_rate_total` terbesar** (dilog di state JSON).
+- State: `random_search_state_epoch5000.json` dan `random_search_state_epoch3000.json`.
 
-Flag **`--search-only`** / **`--hyperband-only`** (alias legacy): lewati baseline, jalankan random search + rerun saja.
+Flag **`--search-only`** / **`--hyperband-only`** (alias legacy): lewati baseline, jalankan kedua fase search saja.
 
 ### Menjalankan dari akar repositori
 
@@ -448,13 +436,11 @@ Gunakan **`--search-only`** di `run_experiment.py`, atau skrip pintasan **`scrip
 
 Flag **`--baseline-only`** dan **`--search-only`** / **`--hyperband-only`** saling eksklusif.
 
-**Catatan:** opsi **`--results-csv`** mengubah lokasi **`results.csv`** untuk baseline dan rerun pemenang. Trial random search **tidak** ditulis ke `results.csv` — state-nya ada di **`random_search_state.json`**.
-
-Penjelasan **`--results-csv`**: jika **tidak** diberikan, file CSV default adalah `<output-dir>/results.csv`. Kombinasi `(cfg_idx, seed, profile, fold)` yang sudah **`status=ok`** dilewati saat rerun/baseline.
+**Catatan:** opsi **`--results-csv`** mengubah lokasi **`results.csv`** untuk semua fase (baseline + trial search).
 
 ### Training ulang: hanya baseline, folder baru (laptop, tanpa melanjutkan run lama)
 
-Orchestrator **melewati** job yang sudah selesai jika di `--output-dir` yang sama sudah ada **`metrics.json`**. Untuk **baseline** dan **rerun pemenang**, lewati juga jika **`results.csv`** memuat baris `status=ok`. Untuk **fase random search**, resume dari **`random_search_state.json`**. Folder baru = mulai dari nol:
+Orchestrator **melewati** job yang sudah selesai jika di `--output-dir` yang sama sudah ada **`metrics.json`** atau baris **`status=ok`** di `results.csv`. Random search resume dari state per fase. Folder baru = mulai dari nol:
 
 ```bash
 mkdir -p outputs/baseline_laptop_fresh
@@ -472,7 +458,6 @@ mkdir -p outputs/baseline_laptop_fresh
 python scripts/run_experiment.py \
   --baseline-only \
   --seeds 0 42 101 \
-  --profiles standard minimal \
   --output-dir outputs/baseline_laptop_fresh \
   --zarr-path FlowPolicy/data/kitchen_complete_from_minari.zarr \
   --max-batch-size 16 \
@@ -480,7 +465,7 @@ python scripts/run_experiment.py \
 ```
 
 - Ganti nama **`outputs/baseline_laptop_fresh`** sesuai keinginan Anda (tanggal / mesin).
-- Jika Anda **sengaja** memakai ulang folder lama tetapi ingin train ulang semua, hapus dulu isinya (**`runs/`**, **`results.csv`**, **`configs.json`**, **`random_search_state.json`**, **`cv_splits.json`**) — hati-hati: data metrik lama hilang.
+- Jika Anda **sengaja** memakai ulang folder lama tetapi ingin train ulang semua, hapus dulu isinya (**`runs/`**, **`results.csv`**, **`configs.json`**, **`random_search_state_epoch5000.json`**, **`random_search_state_epoch3000.json`**, **`experiment_meta.json`**, **`cv_splits.json`**) — hati-hati: data metrik lama hilang.
 
 ### Opsi untuk GPU 16 GB
 
@@ -542,23 +527,22 @@ Jika masih OOM setelah **`16`**, turunkan **`--random-search-n`** atau **`--max-
 
 | Argumen | Default | Keterangan |
 |---------|---------|------------|
-| `--seeds` | `0 42 101` | Seed untuk baseline / rerun pemenang (train + inferensi). |
-| `--profiles` | `standard minimal` | Profil preprocessing baseline + rerun (`standard` = augmentasi; `minimal` = tanpa). |
-| `--search-only` | (off) | Hanya random search + rerun pemenang; lewati baseline. |
+| `--seeds` | `0 42 101` | Seed untuk baseline (train + inferensi). |
+| `--search-only` | (off) | Hanya dua fase random search; lewati baseline. |
 | `--hyperband-only` | (off) | Alias legacy untuk `--search-only`. |
-| `--random-search-n` | `16` | Jumlah trial random search. |
+| `--random-search-n` | `10` | Jumlah trial **per fase** random search. |
 | `--random-search-seed` | `99` | Seed RNG sampling konfigurasi. |
 | `--random-search-sigma` | `1.0` | Lebar sampling di sekitar baseline. |
-| `--search-train-seed` | `0` | Seed training **selama fase search** (satu seed). |
-| `--search-profile` | **`minimal`** | Profil preprocessing **selama fase search** (satu profil). |
-| `--disable-early-stop` | (off) | Matikan early stopping (baseline, search, rerun). |
+| `--search-train-seed` | (auto) | Override seed training search; default dari baseline terbaik. |
+| `--disable-early-stop` | (off) | Matikan early stopping (baseline + search). |
 | `--early-stop-rollout-every` | `200` | Interval epoch eval simulasi untuk early stop. |
 | `--cv-seed` | `12345` | Seed pembagian episode train/val/test. |
-| `--n-infer-episodes` | `50` | Episode evaluasi inferensi test (rerun/baseline). |
+| `--n-infer-episodes` | `50` | Episode evaluasi inferensi test. |
 | `--skip-inference-videos` | (off) | Lewati MP4 `infer_ep_*.mp4`. |
 | `--output-dir` | `outputs/experiment` | Relatif terhadap akar repo. |
 | `--results-csv` | (off) | Lokasi `results.csv` kustom; job `status=ok` dilewati. |
-| `--max-batch-size` | `128` | Plafon batch train/val. |
+| `--max-batch-size` | `128` | Plafon batch train/val baseline. |
+| `--search-max-batch-size` | `512` | Plafon batch fase random search. |
 | `--dataloader-num-workers` | `4` | Workers DataLoader. |
 | `--checkpoint-every` | `200` | Frekuensi simpan checkpoint (resume). |
 | `--baseline-only` | (off) | Hanya baseline; lewati random search. |
@@ -567,23 +551,23 @@ Jika masih OOM setelah **`16`**, turunkan **`--random-search-n`** atau **`--max-
 
 Di `--output-dir` (mis. `outputs/experiment/`):
 
-- `configs.json` — baseline (`baseline_config_dict()`) untuk fase-1 dan rerun pemenang.
-- `random_search_state.json` — state random search: trial, `val_loss` per cfg, pemenang. Resume search.
+- `configs.json` — baseline untuk fase-1.
+- `experiment_meta.json` — seed baseline terbaik, pemenang per fase search.
+- `random_search_state_epoch5000.json` / `random_search_state_epoch3000.json` — state per fase search.
 - `cv_splits.json` — satu partisi train/val (+ meta `split_mode`).
-- `results.csv` — baseline (`cfg_idx=-1`) dan rerun pemenang (`cfg_idx=-3`). Trial search **tidak** ada di CSV.
-- `runs/<nama_run>/` — Hydra output, `checkpoints/`, `metrics.json`, `training_final.json`, `inference_videos/` (setelah inferensi).
+- `results.csv` — baseline (`cfg_idx=-1`) dan semua trial search (`cfg_idx` 1000+ / 2000+).
+- `runs/<nama_run>/` — Hydra output, `checkpoints/`, `metrics.json`, `training_final.json`, `inference_videos/`.
 - `summary.csv`, `plots/*` — dari `summarize.py` / `plot_results.py`.
 
 Nama folder run:
 
-- Baseline: `baseline_seed<seed>_<profile>` (`cfg_idx=-1`).
-- Rerun pemenang search: `hb_best_seed<seed>_<profile>` (`cfg_idx=-3`).
-- Trial random search: `hb_cfg<idx>_seed<search_seed>_<search_profile>` (mis. `hb_cfg1000_seed0_minimal`).
+- Baseline: `baseline_seed<seed>_minimal` (`cfg_idx=-1`).
+- Trial random search: `rs_cfg<idx>_seed<seed>_minimal` (mis. `rs_cfg1000_seed42_minimal`).
 
 ### Resume setelah mesin mati
 
-- **Baseline** dan **rerun pemenang**: dilewati jika ada **`metrics.json`** atau baris **`status=ok`** di `results.csv`.
-- **Random search**: resume dari **`random_search_state.json`** — trial dengan `done=true` dilewati.
+- **Baseline** dan **trial search**: dilewati jika ada **`metrics.json`** atau baris **`status=ok`** di `results.csv`.
+- **Random search**: resume dari state per fase — trial dengan `done=true` dilewati.
 - Training terputus (`latest.ckpt`, belum `training_final.json`) → dilanjutkan (`training.resume=true`).
 - Training selesai, inferensi belum → hanya `infer_kitchen.py`.
 

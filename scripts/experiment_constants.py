@@ -76,11 +76,31 @@ DEFAULT_BASELINE_HPARAMS = {
 }
 
 BASELINE_CFG_IDX = -1
-# Pemenang final random search yang di-rerun pada 3 seeds × 2 profiles.
+# Pemenang final random search (legacy; rerun dihapus dari pipeline baru).
 HYPERBAND_BEST_CFG_IDX = -3
 SEARCH_BEST_CFG_IDX = HYPERBAND_BEST_CFG_IDX
 SEARCH_CFG_IDX_BASE = 1000
+SEARCH_CFG_IDX_BASE_EPOCH_3000 = 2000
 HYPERBAND_CFG_IDX_BASE = SEARCH_CFG_IDX_BASE
+
+# Profil preprocessing tunggal (standard = noise observasi; tidak dipakai).
+DEFAULT_PREPROCESSING_PROFILE = "minimal"
+
+# Mode random search: anchor epoch terpisah per fase.
+EPOCH_SEARCH_MODES: Dict[str, Dict[str, Any]] = {
+    "epoch_5000": {"choices": [4500, 5000, 5500], "center": 5000},
+    "epoch_3000": {"choices": [2500, 3000, 3500], "center": 3000},
+}
+
+EPOCH_SEARCH_STATE_FILES: Dict[str, str] = {
+    "epoch_5000": "random_search_state_epoch5000.json",
+    "epoch_3000": "random_search_state_epoch3000.json",
+}
+
+EPOCH_SEARCH_CFG_IDX_BASE: Dict[str, int] = {
+    "epoch_5000": SEARCH_CFG_IDX_BASE,
+    "epoch_3000": SEARCH_CFG_IDX_BASE_EPOCH_3000,
+}
 
 # Ruang pencarian lokal random search — setiap list HARUS mencakup nilai baseline.
 LOCAL_SEARCH_SPACE: Dict[str, List[Any]] = {
@@ -174,10 +194,24 @@ def sample_configs_around_baseline(
     base_cfg_idx: int = SEARCH_CFG_IDX_BASE,
     sigma: float = 1.0,
     p_exact_baseline: float = 0.15,
+    epoch_mode: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Sample ``n`` konfigurasi random search berpusat di ``center`` (default baseline)."""
+    """Sample ``n`` konfigurasi random search berpusat di ``center`` (default baseline).
+
+    Jika ``epoch_mode`` diset (``epoch_5000`` / ``epoch_3000``), sampling
+    ``training.num_epochs`` dibatasi ke pilihan mode tersebut (Gaussian di indeks).
+    """
     center = center or DEFAULT_BASELINE_HPARAMS
     space = search_space or LOCAL_SEARCH_SPACE
+    epoch_spec: Optional[Dict[str, Any]] = None
+    if epoch_mode is not None:
+        if epoch_mode not in EPOCH_SEARCH_MODES:
+            raise ValueError(
+                f"epoch_mode tidak dikenal: {epoch_mode!r} "
+                f"(gunakan {list(EPOCH_SEARCH_MODES.keys())!r})"
+            )
+        epoch_spec = EPOCH_SEARCH_MODES[epoch_mode]
+
     out: List[Dict[str, Any]] = []
     keys = list(space.keys())
 
@@ -185,7 +219,16 @@ def sample_configs_around_baseline(
         d: Dict[str, Any] = {"cfg_idx": int(base_cfg_idx) + i}
         use_exact = rng.rand() < float(p_exact_baseline)
         for k in keys:
-            if use_exact and k in center:
+            if k == "training.num_epochs" and epoch_spec is not None:
+                epoch_choices = epoch_spec["choices"]
+                epoch_center = epoch_spec["center"]
+                if use_exact:
+                    d[k] = int(epoch_center)
+                else:
+                    d[k] = _weighted_choice(
+                        rng, epoch_choices, epoch_center, sigma=sigma
+                    )
+            elif use_exact and k in center:
                 d[k] = center[k]
             else:
                 d[k] = _weighted_choice(

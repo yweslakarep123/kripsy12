@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Uji coba random search di laptop (VRAM ~8 GB) — BUKAN run produksi.
 #
-# Tujuan: memastikan orkestrator + train.py + random_search_state.json jalan
-# end-to-end dengan biaya waktu kecil (N=2 trial, profil minimal, 1 seed rerun).
+# Tujuan: memastikan orkestrator + train + infer + state JSON jalan end-to-end
+# dengan biaya waktu kecil (N=1 trial/fase, 1 seed).
 #
 # Prasyarat:
 #   conda activate flowpolicy-kitchen
@@ -11,8 +11,6 @@
 #
 # Dari akar repo:
 #   ./scripts/run_hyperband_laptop_smoke.sh
-#
-# Jika CUDA error "unknown error": reboot laptop, tutup app GPU berat, lalu coba lagi.
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -39,11 +37,9 @@ exec python scripts/run_experiment.py \
   --output-dir "$OUT" \
   --zarr-path "$ZARR" \
   --seeds 0 \
-  --profiles minimal \
-  --random-search-n 2 \
+  --random-search-n 1 \
   --random-search-seed 7 \
   --search-train-seed 0 \
-  --search-profile minimal \
   --n-infer-episodes 2 \
   --n-train-val-episodes 0 \
   --max-batch-size 16 \

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hydra override train — dipakai baseline, random search, dan rerun pemenang."""
+"""Hydra override train — dipakai baseline dan random search."""
 
 from __future__ import annotations
 
@@ -69,33 +69,6 @@ def build_train_overrides(
                 f"training.early_stop.monitor_keys={mk_hydra}",
             ]
         )
-        # #region agent log
-        import json
-        import time
-
-        try:
-            with open(
-                "/home/daffa/Documents/kripsy12/.cursor/debug-ebd6f9.log", "a"
-            ) as _f:
-                _f.write(
-                    json.dumps(
-                        {
-                            "sessionId": "ebd6f9",
-                            "hypothesisId": "ES",
-                            "location": "train_overrides.py:build_train_overrides",
-                            "message": "early_stop monitor_keys",
-                            "data": {
-                                "monitor_keys": EARLY_STOP_MONITOR_KEYS,
-                                "batch_size": bs,
-                            },
-                            "timestamp": int(time.time() * 1000),
-                        }
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
-        # #endregion
     else:
         odl.append("training.rollout_every=999999")
 
