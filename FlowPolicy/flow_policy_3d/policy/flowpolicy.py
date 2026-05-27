@@ -192,6 +192,40 @@ class FlowPolicy(BasePolicy):
         obs_dict: must include "obs" key
         result: must include "action" key
         """
+        # #region agent log
+        if not getattr(self, "_dbg_norm_logged", False):
+            self._dbg_norm_logged = True
+            try:
+                import json as _json
+                _norm_scales = {}
+                for _k, _v in getattr(self.normalizer, "params_dict", {}).items():
+                    if hasattr(_v, "get") and "scale" in _v:
+                        _norm_scales[_k] = int(_v["scale"].shape[0])
+                _obs_shapes = {
+                    _k: list(_v.shape) for _k, _v in obs_dict.items()
+                }
+                with open(
+                    "/home/daffa/Documents/kripsy12/.cursor/debug-8a2c7a.log", "a"
+                ) as _lf:
+                    _lf.write(
+                        _json.dumps(
+                            {
+                                "sessionId": "8a2c7a",
+                                "location": "flowpolicy.py:predict_action",
+                                "message": "obs vs normalizer dims before normalize",
+                                "data": {
+                                    "obs_shapes": _obs_shapes,
+                                    "normalizer_scale_dims": _norm_scales,
+                                },
+                                "hypothesisId": "H1,H2,H4",
+                                "timestamp": int(time.time() * 1000),
+                            }
+                        )
+                        + "\n"
+                    )
+            except Exception:
+                pass
+        # #endregion
         # normalize input
         nobs = self.normalizer.normalize(obs_dict)
         # this_n_point_cloud = nobs['imagin_robot'][..., :3] # only use coordinate
