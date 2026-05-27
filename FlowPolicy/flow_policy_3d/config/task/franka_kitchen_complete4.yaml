@@ -25,6 +25,7 @@ env_runner:
   task_name: ${task_name}
   device: ${training.device}
   use_point_crop: ${policy.use_point_crop}
+  num_points: 512
   max_steps: 280
   tasks_to_complete:
     - microwave

@@ -2,40 +2,25 @@
 """
 Orkestrator eksperimen (tanpa k-fold, satu partisi train/val/test):
 
-  1) Baseline — hyperparameter default × len(seeds) × len(profiles)
-  2) Pencarian — **Hyperband** (Li et al., 2018, https://arxiv.org/pdf/1603.06560).
+  1) Baseline — hyperparameter default × 3 seed × profil minimal
+  2) Pilih seed baseline terbaik (test success_rate_total)
+  3) Random search @ epoch 5000 — N trial near baseline HP, seed terpilih
+  4) Random search @ epoch 3000 — N trial near baseline HP, seed sama
 
-Hyperband berjalan pada **satu seed × satu profile** (default: seed=0,
-profile=standard) menggunakan ``val_loss`` sebagai sinyal early-stopping
-antar-rung. Setelah Hyperband selesai, konfigurasi pemenang (val_loss
-terkecil seenough across all evaluations sesuai paper) di-**rerun penuh**
-pada semua ``seeds × profiles`` user (default 3 × 2 = 6 run) dengan training
-+ inference + write ``results.csv`` ``status=ok`` — analog baseline.
+Setiap run (baseline + trial search): training + inferensi + results.csv.
 
 Flag mutually exclusive:
 
-- ``--baseline-only`` — hanya baseline; Hyperband dilewati.
-- ``--hyperband-only`` — hanya Hyperband (skip baseline; butuh ``--zarr-path``
-  tetap valid).
+- ``--baseline-only`` — hanya baseline; random search dilewati.
+- ``--search-only`` — hanya dua fase random search (skip baseline).
 
-Tanpa flag: jalankan baseline lalu Hyperband berurutan.
-
-Metrik inferensi: fase train/val (sim) + fase test; metrik simulasi akhir
-training (``training_sim_*``) dari ``training_sim_metrics.json``; success total
-& k1–k4; latensi global + rata-rata per-episod; ``trade_off`` dan
-``trade_off_episode_latency``. Video: MP4 inferensi per-episod di
-``inference_videos/``, bukan video rollout training di W&B.
+Tanpa flag: jalankan baseline lalu kedua fase search berurutan.
 
 Resume:
 
-- Baseline & pemenang Hyperband (cfg_idx=-3): metrik lengkap (``metrics.json``)
-  dilewati; juga dilewati jika baris ``results.csv`` yang sama sudah ``status=ok``.
-- Training terputus dilanjutkan (resume Hydra) jika ada ``latest.ckpt`` tanpa
-  ``training_final.json``; infer saja jika ``training_final.json`` + ckpt sudah
-  ada tetapi belum ``metrics.json``.
-- Hyperband: ``hyperband_state.json`` di ``--output-dir`` menyimpan state
-  bracket + rung + ``val_loss`` per config — resume otomatis melewati rung yang
-  sudah dievaluasi.
+- Baseline: metrik lengkap (``metrics.json``) atau ``results.csv`` ``status=ok``.
+- Random search: ``random_search_state_epoch5000.json`` /
+  ``random_search_state_epoch3000.json`` — resume otomatis per fase.
 """
 
 from __future__ import annotations
@@ -60,14 +45,18 @@ from cv_splits import build_single_train_val_split, save_splits  # noqa: E402
 from experiment_constants import (  # noqa: E402
     BASELINE_CFG_IDX,
     CSV_HPARAM_KEYS,
-    HYPERBAND_BEST_CFG_IDX,
+    DEFAULT_PREPROCESSING_PROFILE,
+    DEFAULT_SEARCH_PREPROCESSING_PROFILE,
+    DEFAULT_SEARCH_TRAIN_SEED,
+    EPOCH_SEARCH_MODES,
     RESULTS_CSV_METRIC_COLUMNS,
     baseline_config_dict,
-    compute_horizon,
     empty_metrics_row,
     metrics_row_from_infer_json,
 )
-from hyperband_search import run_hyperband  # noqa: E402
+from infer_utils import run_infer_subprocess  # noqa: E402
+from random_search import run_random_search  # noqa: E402
+from train_overrides import build_train_overrides  # noqa: E402
 
 
 def _fmt_hydra_val(v: Any) -> str:
@@ -84,15 +73,72 @@ def apply_vram_limits(cfg: Dict[str, Any], max_batch: int) -> Dict[str, Any]:
     return c
 
 
+def verify_zarr_has_point_cloud(zarr_rel: str) -> str:
+    """Pastikan zarr memuat ``point_cloud`` sebelum training point-net.
+
+    Returns:
+        Path absolut zarr yang diverifikasi.
+
+    Raises:
+        SystemExit: jika zarr tidak ada atau state-only (tanpa point_cloud).
+    """
+    zarr_rel = str(zarr_rel).strip()
+    if os.path.isabs(zarr_rel):
+        resolved = os.path.normpath(os.path.expanduser(zarr_rel))
+    else:
+        resolved = str((FLOWPOLICY_ROOT / zarr_rel).resolve())
+
+    if not os.path.isdir(resolved):
+        print(
+            f"[error] Zarr tidak ditemukan: {resolved}\n"
+            "Bangun dulu dengan:\n"
+            "  ./scripts/build_kitchen_pointcloud_zarr.sh\n"
+            f"  atau set --zarr-path ke path zarr yang valid.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    try:
+        import zarr as _zarr
+
+        root = _zarr.open(resolved, mode="r")
+        keys = list(root["data"].keys())
+    except Exception as e:
+        print(f"[error] Gagal membaca zarr {resolved}: {e}", file=sys.stderr)
+        raise SystemExit(1) from e
+
+    if "point_cloud" not in keys:
+        print(
+            f"[error] Zarr state-only (tanpa point_cloud) — pipeline ini memakai PointNet 512 pts.\n"
+            f"  path: {resolved}\n"
+            f"  keys: {keys}\n\n"
+            "Tidak ada file unduhan terpisah; generate di mesin ini:\n"
+            "  conda activate flowpolicy-kitchen\n"
+            "  ./scripts/build_kitchen_pointcloud_zarr.sh\n\n"
+            "Atau manual:\n"
+            "  python scripts/export_minari_kitchen_to_flowpolicy_zarr.py \\\n"
+            "    --out FlowPolicy/data/kitchen_complete_from_minari.zarr \\\n"
+            "    --minari-id D4RL/kitchen/complete-v2 --device cuda:0 --sampling fps\n",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    pc_shape = tuple(root["data"]["point_cloud"].shape)
+    print(
+        f"[zarr] OK point_cloud {pc_shape} @ {resolved}"
+    )
+    return resolved
+
+
 def load_or_create_config_bundle(
     configs_path: pathlib.Path,
     max_batch: int,
 ) -> Dict[str, Any]:
     """Muat / buat ``configs.json`` (``version: 5``) dengan baseline saja.
 
-    Hyperband menyimpan state-nya di ``hyperband_state.json`` (lihat
-    ``scripts/hyperband_search.py``). File ini hanya menyimpan baseline
-    yang dipakai fase-1 dan re-run pemenang final.
+    Random search menyimpan state di ``random_search_state_epoch5000.json`` /
+    ``random_search_state_epoch3000.json``.
+    File ini hanya menyimpan baseline untuk fase-1 dan re-run pemenang.
     """
     baseline = apply_vram_limits(baseline_config_dict(), max_batch)
 
@@ -116,7 +162,7 @@ def load_or_create_config_bundle(
     configs_path.parent.mkdir(parents=True, exist_ok=True)
     bundle = {
         "version": 5,
-        "search_mode": "hyperband",
+        "search_mode": "random_search_around_baseline",
         "baseline": baseline,
     }
     with open(configs_path, "w") as f:
@@ -124,61 +170,72 @@ def load_or_create_config_bundle(
     return baseline
 
 
-def build_train_overrides(
-    cfg: Dict[str, Any],
+def pick_best_baseline_seed(
+    results_csv: pathlib.Path,
+    seeds: List[int],
     *,
-    seed: int,
-    profile: str,
-    train_eps: List[int],
-    val_eps: List[int],
-    run_dir: pathlib.Path,
-    zarr_rel: str,
-    resume_training: bool,
-    checkpoint_every: int,
-    dataloader_num_workers: int,
-) -> List[str]:
-    n_obs = int(cfg["n_obs_steps"])
-    n_act = int(cfg["n_action_steps"])
-    hz = compute_horizon(n_obs, n_act)
-    bs = int(cfg["dataloader.batch_size"])
-
-    def il(xs: List[int]) -> str:
-        return "[" + ",".join(str(int(x)) for x in xs) + "]"
-
-    odl: List[str] = [
-        "task=franka_kitchen_complete4",
-        f"task.dataset.zarr_path={zarr_rel}",
-        f"task.dataset.train_episode_indices={il(train_eps)}",
-        f"task.dataset.val_episode_indices={il(val_eps)}",
-        f"task.dataset.preprocessing_profile={profile}",
-        f"training.seed={seed}",
-        f"task.dataset.seed={seed}",
-        "training.compute_val_loss=true",
-        "training.rollout_every=999999",
-        f"training.resume={str(resume_training).lower()}",
-        "checkpoint.save_ckpt=true",
-        f"training.checkpoint_every={checkpoint_every}",
-        "checkpoint.save_last_ckpt=true",
-        "logging.mode=offline",
-        f"hydra.run.dir={run_dir.resolve()}",
-        "hydra.job.chdir=true",
-        f"horizon={hz}",
-        f"n_obs_steps={n_obs}",
-        f"n_action_steps={n_act}",
-        f"dataloader.batch_size={bs}",
-        f"val_dataloader.batch_size={bs}",
-        f"dataloader.num_workers={dataloader_num_workers}",
-        f"val_dataloader.num_workers={dataloader_num_workers}",
+    require_all: bool = True,
+) -> int:
+    """Pilih seed dengan ``test_success_rate_total`` tertinggi dari baseline."""
+    if not results_csv.is_file():
+        raise SystemExit(
+            f"[error] results.csv tidak ditemukan: {results_csv}\n"
+            "Jalankan baseline dulu atau beri --search-train-seed manual."
+        )
+    df = pd.read_csv(results_csv)
+    if df.empty:
+        raise SystemExit("[error] results.csv kosong; jalankan baseline dulu.")
+    df["cfg_idx"] = df["cfg_idx"].astype(int)
+    df["seed"] = df["seed"].astype(int)
+    df["status"] = df["status"].astype(str)
+    rows = df[
+        (df["cfg_idx"] == int(BASELINE_CFG_IDX))
+        & (df["status"] == "ok")
+        & (df["seed"].isin([int(s) for s in seeds]))
     ]
+    if require_all and len(rows) < len(seeds):
+        missing = set(int(s) for s in seeds) - set(rows["seed"].astype(int).tolist())
+        raise SystemExit(
+            f"[error] baseline belum lengkap ({len(rows)}/{len(seeds)} seed ok). "
+            f"Seed belum selesai: {sorted(missing)}"
+        )
+    if rows.empty:
+        raise SystemExit(
+            "[error] tidak ada baris baseline status=ok di results.csv."
+        )
+    metric_col = None
+    for col in ("test_success_rate_total", "success_rate_total"):
+        if col in rows.columns:
+            metric_col = col
+            break
+    if metric_col is None:
+        raise SystemExit(
+            "[error] kolom test_success_rate_total tidak ada di results.csv."
+        )
+    rows = rows.copy()
+    rows["_metric"] = pd.to_numeric(rows[metric_col], errors="coerce")
+    rows = rows.dropna(subset=["_metric"])
+    if rows.empty:
+        raise SystemExit("[error] tidak ada metrik success rate baseline yang valid.")
+    best_idx = rows.sort_values(["_metric", "seed"], ascending=[False, True]).index[0]
+    return int(rows.loc[best_idx, "seed"])
 
-    for k in CSV_HPARAM_KEYS:
-        if k == "cfg_idx":
-            continue
-        if k == "_state_mlp_hidden":
-            odl.append(f"policy.encoder_output_dim={_fmt_hydra_val(cfg[k])}")
-            continue
-        odl.append(f"{k}={_fmt_hydra_val(cfg[k])}")
-    return odl
+
+def save_experiment_meta(
+    out_root: pathlib.Path,
+    meta: Dict[str, Any],
+) -> None:
+    path = out_root / "experiment_meta.json"
+    existing: Dict[str, Any] = {}
+    if path.is_file():
+        try:
+            with open(path) as f:
+                existing = json.load(f)
+        except Exception:
+            existing = {}
+    existing.update(meta)
+    with open(path, "w") as f:
+        json.dump(existing, f, indent=2)
 
 
 def row_key_ok_exists(csv_path: pathlib.Path, key: Tuple[int, int, str, int]) -> bool:
@@ -296,46 +353,6 @@ def sync_csv_from_metrics_if_needed(
     )
 
 
-def run_infer_subprocess(
-    py: str,
-    infer_py: pathlib.Path,
-    cwd_train: str,
-    env: dict,
-    ckpt_path: pathlib.Path,
-    metrics_path: pathlib.Path,
-    n_infer_episodes: int,
-    seed: int,
-    *,
-    n_train_val_episodes: int,
-    train_val_eval_seed_offset: int,
-    skip_inference_videos: bool = False,
-) -> int:
-    cmd = [
-        py,
-        str(infer_py),
-        "--checkpoint",
-        str(ckpt_path),
-        "--metrics-json",
-        str(metrics_path),
-        "--n-train-val-episodes",
-        str(int(n_train_val_episodes)),
-        "--train-val-eval-seed-offset",
-        str(int(train_val_eval_seed_offset)),
-        "--n-infer-episodes",
-        str(n_infer_episodes),
-        "--seed",
-        str(seed),
-        "--warmup-steps",
-        "20",
-    ]
-    if skip_inference_videos:
-        cmd.append("--skip-inference-videos")
-    else:
-        vdir = pathlib.Path(metrics_path).parent / "inference_videos"
-        cmd.extend(["--inference-videos-dir", str(vdir.resolve())])
-    return subprocess.run(cmd, cwd=cwd_train, env=env).returncode
-
-
 def execute_one_job(
     *,
     cfg: Dict[str, Any],
@@ -360,6 +377,8 @@ def execute_one_job(
     train_val_eval_seed_offset: int,
     skip_inference_videos: bool = False,
     resume_from_results_csv: bool = True,
+    enable_early_stop: bool = True,
+    early_stop_rollout_every: int = 200,
 ) -> None:
     run_dir = runs_root / run_name
     metrics_path = run_dir / "metrics.json"
@@ -474,6 +493,8 @@ def execute_one_job(
         resume_training=resume_training,
         checkpoint_every=checkpoint_every,
         dataloader_num_workers=dataloader_num_workers,
+        enable_early_stop=enable_early_stop,
+        early_stop_rollout_every=early_stop_rollout_every,
     )
 
     phase = (
@@ -603,9 +624,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 42, 101])
     ap.add_argument(
-        "--profiles", type=str, nargs="+", default=["standard", "minimal"]
-    )
-    ap.add_argument(
         "--cv-seed",
         type=int,
         default=12345,
@@ -634,7 +652,13 @@ def main():
         "--max-batch-size",
         type=int,
         default=128,
-        help="Plafon batch size (training+val) untuk mengurangi risiko OOM pada VRAM ~16GB.",
+        help="Plafon batch size baseline (default 128; VRAM ~16GB).",
+    )
+    ap.add_argument(
+        "--search-max-batch-size",
+        type=int,
+        default=512,
+        help="Plafon batch size khusus fase random search (default 512).",
     )
     ap.add_argument(
         "--dataloader-num-workers",
@@ -645,60 +669,69 @@ def main():
     ap.add_argument(
         "--baseline-only",
         action="store_true",
-        help="Hanya baseline (3 seed × 2 profil = 6 run default); tanpa Hyperband.",
+        help="Hanya baseline (3 seed × profil minimal); tanpa random search.",
+    )
+    ap.add_argument(
+        "--search-only",
+        action="store_true",
+        help="Hanya dua fase random search (tanpa baseline).",
     )
     ap.add_argument(
         "--hyperband-only",
         action="store_true",
-        help="Hanya Hyperband + re-run pemenang top-1 (tanpa baseline).",
+        help="Alias untuk --search-only (kompatibilitas lama).",
     )
     ap.add_argument(
-        "--hyperband-max-epochs",
+        "--random-search-n",
         type=int,
-        default=3000,
-        metavar="R",
-        help="Hyperband: resource maksimum per konfigurasi (R, default 3000 = "
-        "baseline default num_epochs).",
+        default=10,
+        metavar="N",
+        help="Jumlah trial per fase random search (default 10).",
     )
     ap.add_argument(
-        "--hyperband-eta",
-        type=int,
-        default=3,
-        help="Hyperband: rasio downsampling antar-rung (eta, default 3 sesuai paper).",
-    )
-    ap.add_argument(
-        "--hyperband-s-min",
-        type=int,
-        default=0,
-        help="Hyperband: indeks bracket terkecil yang dijalankan (default 0 = semua "
-        "bracket hingga s=0/random search). Naikkan ke 2 untuk hanya single-bracket "
-        "SHA (lebih hemat waktu) — lihat README untuk anggaran waktu.",
-    )
-    ap.add_argument(
-        "--hyperband-s-max",
-        type=int,
-        default=None,
-        metavar="S",
-        help="Hyperband: indeks bracket terbesar (default = floor(log_eta(R))). "
-        "Cap di bawah nilai native untuk hindari bracket dengan banyak config kecil-r.",
-    )
-    ap.add_argument(
-        "--hyperband-seed",
+        "--random-search-seed",
         type=int,
         default=99,
-        help="Seed RNG sampling konfigurasi Hyperband (reproducible).",
+        help="Seed RNG sampling konfigurasi random search.",
     )
     ap.add_argument(
-        "--hyperband-search-train-seed",
+        "--random-search-sigma",
+        type=float,
+        default=1.0,
+        help="Lebar Gaussian sampling di sekitar baseline (indeks ruang diskret).",
+    )
+    ap.add_argument(
+        "--random-search-p-exact-baseline",
+        type=float,
+        default=0.15,
+        help="Probabilitas trial persis baseline (default 0.15).",
+    )
+    ap.add_argument(
+        "--search-train-seed",
         type=int,
-        default=0,
-        help="Seed training yang dipakai SELAMA fase Hyperband (1 seed saja agar cepat).",
+        default=DEFAULT_SEARCH_TRAIN_SEED,
+        help="Seed training fase random search (default: "
+        f"{DEFAULT_SEARCH_TRAIN_SEED}). Set -1 untuk pilih otomatis dari "
+        "results.csv baseline terbaik.",
     )
     ap.add_argument(
-        "--hyperband-search-profile",
+        "--search-profile",
         type=str,
-        default="standard",
-        help="Profil preprocessing yang dipakai SELAMA fase Hyperband (1 profil saja).",
+        default=DEFAULT_SEARCH_PREPROCESSING_PROFILE,
+        choices=["standard", "minimal"],
+        help="Profil preprocessing random search (default: "
+        f"{DEFAULT_SEARCH_PREPROCESSING_PROFILE!r}).",
+    )
+    ap.add_argument(
+        "--disable-early-stop",
+        action="store_true",
+        help="Nonaktifkan early stopping success-rate (baseline dan random search).",
+    )
+    ap.add_argument(
+        "--early-stop-rollout-every",
+        type=int,
+        default=200,
+        help="Interval epoch eval simulasi untuk early stopping (default 200).",
     )
     ap.add_argument(
         "--n-train-val-episodes",
@@ -724,8 +757,13 @@ def main():
         help="Simpan checkpoint berkala agar training bisa dilanjut setelah mesin mati.",
     )
     args = ap.parse_args()
-    if args.baseline_only and args.hyperband_only:
-        ap.error("--baseline-only dan --hyperband-only saling meniadakan.")
+    search_only = bool(args.search_only or args.hyperband_only)
+    if args.baseline_only and search_only:
+        ap.error("--baseline-only dan --search-only/--hyperband-only saling meniadakan.")
+
+    baseline_profile = DEFAULT_PREPROCESSING_PROFILE
+    search_profile = str(args.search_profile)
+    search_epoch_modes = ["epoch_5000", "epoch_3000"]
 
     out_root = (REPO_ROOT / args.output_dir).resolve()
     runs_root = out_root / "runs"
@@ -743,6 +781,8 @@ def main():
         results_csv.parent.mkdir(parents=True, exist_ok=True)
     else:
         results_csv = out_root / "results.csv"
+
+    verify_zarr_has_point_cloud(args.zarr_path)
 
     baseline_cfg = load_or_create_config_bundle(configs_path, args.max_batch_size)
 
@@ -763,13 +803,10 @@ def main():
             "partition_index": 0,
             "cv_seed": args.cv_seed,
             "max_batch_size": args.max_batch_size,
-            "hyperparam_search": "hyperband",
-            "hyperband_max_epochs": int(args.hyperband_max_epochs),
-            "hyperband_eta": int(args.hyperband_eta),
-            "hyperband_s_min": int(args.hyperband_s_min),
-            "hyperband_s_max": (
-                None if args.hyperband_s_max is None else int(args.hyperband_s_max)
-            ),
+            "hyperparam_search": "random_search_around_baseline",
+            "random_search_n": int(args.random_search_n),
+            "random_search_seed": int(args.random_search_seed),
+            "random_search_sigma": float(args.random_search_sigma),
         },
     )
 
@@ -780,91 +817,109 @@ def main():
     hp_cols = list(CSV_HPARAM_KEYS)
     split_fold_idx = int(fold_entry["fold"])
 
-    n_base = len(args.seeds) * len(args.profiles)
-    n_final = len(args.seeds) * len(args.profiles)
+    enable_early_stop = not args.disable_early_stop
+
+    n_base = len(args.seeds)
+    n_search_total = int(args.random_search_n) * len(search_epoch_modes)
     if args.baseline_only:
         print(
             "\n>>> Mode --baseline-only: hanya baseline "
-            f"({n_base} run). Fase Hyperband dilewati.\n"
+            f"({n_base} run, profil={baseline_profile!r}). Random search dilewati.\n"
             "    Satu partisi train/val, tanpa k-fold.\n"
-            f"    VRAM: max_batch_size={args.max_batch_size}, "
+            f"    Early stop: {'on' if enable_early_stop else 'off'}, "
+            f"rollout_every={args.early_stop_rollout_every}\n"
+            f"    VRAM baseline: max_batch_size={args.max_batch_size}, "
+            f"random search: search_max_batch_size={args.search_max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
         )
-    elif args.hyperband_only:
+    elif search_only:
         print(
-            "\n>>> Mode --hyperband-only: Hyperband (1 seed × 1 profile) "
-            f"diikuti rerun top-1 pemenang di {n_final} run "
-            f"({len(args.seeds)} seeds × {len(args.profiles)} profiles).\n"
+            "\n>>> Mode --search-only: dua fase random search "
+            f"({n_search_total} trial total).\n"
             "    Baseline dilewati.\n"
-            f"    R={args.hyperband_max_epochs}, eta={args.hyperband_eta}, "
-            f"s_min={args.hyperband_s_min}, s_max={args.hyperband_s_max}\n"
-            f"    VRAM: max_batch_size={args.max_batch_size}, "
+            f"    Fase 1: epoch=5000 ({args.random_search_n} trial)\n"
+            f"    Fase 2: epoch=3000 ({args.random_search_n} trial)\n"
+            f"    Train seed={args.search_train_seed}, profil={search_profile!r}\n"
+            f"    N={args.random_search_n}, sampling_seed={args.random_search_seed}, "
+            f"sigma={args.random_search_sigma}\n"
+            f"    Early stop: {'on' if enable_early_stop else 'off'}, "
+            f"rollout_every={args.early_stop_rollout_every}\n"
+            f"    VRAM random search: search_max_batch_size={args.search_max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
         )
     else:
         print(
             "\n>>> Urutan: (1) Baseline "
-            f"({n_base} run) → (2) Hyperband (1 seed × 1 profile) "
-            f"→ (3) rerun top-1 pemenang ({n_final} run). "
+            f"({n_base} run) → "
+            f"(2) random search epoch=5000 ({args.random_search_n} trial) → "
+            f"(3) random search epoch=3000 ({args.random_search_n} trial). "
             "Satu partisi train/val, tanpa k-fold.\n"
-            f"    Hyperband: R={args.hyperband_max_epochs}, eta={args.hyperband_eta}, "
-            f"s_min={args.hyperband_s_min}, s_max={args.hyperband_s_max}\n"
-            f"    VRAM: max_batch_size={args.max_batch_size}, "
+            f"    Baseline profil: {baseline_profile!r}; "
+            f"random search: profil={search_profile!r}, "
+            f"seed={args.search_train_seed} "
+            "(set --search-train-seed -1 untuk pilih dari baseline).\n"
+            f"    Random search: N={args.random_search_n}/fase, "
+            f"sampling_seed={args.random_search_seed}, sigma={args.random_search_sigma}\n"
+            f"    Early stop: {'on' if enable_early_stop else 'off'}, "
+            f"rollout_every={args.early_stop_rollout_every}\n"
+            f"    VRAM baseline: max_batch_size={args.max_batch_size}, "
+            f"random search: search_max_batch_size={args.search_max_batch_size}, "
             f"num_workers={args.dataloader_num_workers}\n"
         )
 
-    def run_grid_for_configs(
-        cfgs: List[Dict[str, Any]],
-    ) -> None:
-        for cfg in cfgs:
-            cfg_idx = int(cfg["cfg_idx"])
-            for seed in args.seeds:
-                for profile in args.profiles:
-                    if cfg_idx == BASELINE_CFG_IDX:
-                        run_name = f"baseline_seed{seed}_{profile}"
-                    elif cfg_idx == HYPERBAND_BEST_CFG_IDX:
-                        run_name = f"hb_best_seed{seed}_{profile}"
-                    else:
-                        run_name = f"cfg{cfg_idx}_seed{seed}_{profile}"
-                    execute_one_job(
-                        cfg=cfg,
-                        cfg_idx=cfg_idx,
-                        seed=seed,
-                        profile=profile,
-                        fold_i=split_fold_idx,
-                        fold_entry=fold_entry,
-                        run_name=run_name,
-                        runs_root=runs_root,
-                        results_csv=results_csv,
-                        hp_cols=hp_cols,
-                        py=py,
-                        train_py=train_py,
-                        infer_py=infer_py,
-                        cwd_train=cwd_train,
-                        zarr_path=args.zarr_path,
-                        n_infer_episodes=args.n_infer_episodes,
-                        checkpoint_every=args.checkpoint_every,
-                        dataloader_num_workers=args.dataloader_num_workers,
-                        n_train_val_episodes=args.n_train_val_episodes,
-                        train_val_eval_seed_offset=args.train_val_eval_seed_offset,
-                        skip_inference_videos=args.skip_inference_videos,
-                        resume_from_results_csv=True,
-                    )
+    def run_baseline_grid() -> None:
+        for seed in args.seeds:
+            run_name = f"baseline_seed{seed}_{baseline_profile}"
+            execute_one_job(
+                cfg=baseline_cfg,
+                cfg_idx=BASELINE_CFG_IDX,
+                seed=seed,
+                profile=baseline_profile,
+                fold_i=split_fold_idx,
+                fold_entry=fold_entry,
+                run_name=run_name,
+                runs_root=runs_root,
+                results_csv=results_csv,
+                hp_cols=hp_cols,
+                py=py,
+                train_py=train_py,
+                infer_py=infer_py,
+                cwd_train=cwd_train,
+                zarr_path=args.zarr_path,
+                n_infer_episodes=args.n_infer_episodes,
+                checkpoint_every=args.checkpoint_every,
+                dataloader_num_workers=args.dataloader_num_workers,
+                n_train_val_episodes=args.n_train_val_episodes,
+                train_val_eval_seed_offset=args.train_val_eval_seed_offset,
+                skip_inference_videos=args.skip_inference_videos,
+                resume_from_results_csv=True,
+                enable_early_stop=enable_early_stop,
+                early_stop_rollout_every=args.early_stop_rollout_every,
+            )
 
-    def run_hyperband_phase() -> None:
-        """Jalankan Hyperband (single seed × single profile), lalu rerun top-1
-        pemenang pada full ``seeds × profiles`` dengan pipeline train + infer
-        (cfg_idx=``HYPERBAND_BEST_CFG_IDX``)."""
-        best = run_hyperband(
+    def resolve_search_train_seed(*, require_baseline: bool) -> int:
+        if int(args.search_train_seed) >= 0:
+            return int(args.search_train_seed)
+        return pick_best_baseline_seed(
+            results_csv,
+            args.seeds,
+            require_all=require_baseline,
+        )
+
+    def run_random_search_phase(epoch_mode: str, search_train_seed: int) -> None:
+        spec = EPOCH_SEARCH_MODES[epoch_mode]
+        print(
+            f"\n>>> Random search fase {epoch_mode} "
+            f"(epoch center={spec['center']}, seed={search_train_seed}, "
+            f"profile={search_profile!r}, N={args.random_search_n}).\n"
+        )
+        best = run_random_search(
             out_root=out_root,
             runs_root=runs_root,
-            R=int(args.hyperband_max_epochs),
-            eta=int(args.hyperband_eta),
-            s_min=int(args.hyperband_s_min),
-            s_max=(None if args.hyperband_s_max is None else int(args.hyperband_s_max)),
-            sampling_seed=int(args.hyperband_seed),
-            search_train_seed=int(args.hyperband_search_train_seed),
-            search_profile=str(args.hyperband_search_profile),
+            n_trials=int(args.random_search_n),
+            sampling_seed=int(args.random_search_seed),
+            search_train_seed=int(search_train_seed),
+            search_profile=search_profile,
             train_eps=fold_entry["train_episodes"],
             val_eps=fold_entry["val_episodes"],
             zarr_rel=args.zarr_path,
@@ -872,36 +927,69 @@ def main():
             dataloader_num_workers=args.dataloader_num_workers,
             py=py,
             train_py=train_py,
+            infer_py=infer_py,
             cwd_train=cwd_train,
             apply_vram_limits_fn=apply_vram_limits,
-            max_batch_size=args.max_batch_size,
+            max_batch_size=args.search_max_batch_size,
+            center_hparams=baseline_cfg,
+            sigma=float(args.random_search_sigma),
+            p_exact_baseline=float(args.random_search_p_exact_baseline),
+            enable_early_stop=enable_early_stop,
+            early_stop_rollout_every=args.early_stop_rollout_every,
+            epoch_mode=epoch_mode,
+            results_csv=results_csv,
+            hp_cols=hp_cols,
+            fold_i=split_fold_idx,
+            n_infer_episodes=args.n_infer_episodes,
+            n_train_val_episodes=args.n_train_val_episodes,
+            train_val_eval_seed_offset=args.train_val_eval_seed_offset,
+            skip_inference_videos=args.skip_inference_videos,
         )
         if best is None:
             print(
-                "[hyperband] WARNING: tidak ada pemenang; melewati fase rerun top-1."
+                f"[random_search:{epoch_mode}] WARNING: tidak ada pemenang dengan "
+                "success rate valid."
             )
-            return
+        else:
+            save_experiment_meta(
+                out_root,
+                {
+                    f"best_{epoch_mode}": best,
+                    f"search_train_seed_{epoch_mode}": int(search_train_seed),
+                },
+            )
 
-        # Bangun config untuk rerun pemenang pada full ``seeds × profiles``.
-        winner_cfg: Dict[str, Any] = dict(best["hparams"])
-        winner_cfg["cfg_idx"] = HYPERBAND_BEST_CFG_IDX
-        # Latih pemenang dengan resource MAKSIMUM (R epoch), bukan r_i intermediate.
-        winner_cfg["training.num_epochs"] = int(args.hyperband_max_epochs)
-        winner_cfg = apply_vram_limits(winner_cfg, args.max_batch_size)
-        print(
-            f"\n>>> Rerun pemenang Hyperband (cfg_idx={HYPERBAND_BEST_CFG_IDX}) "
-            f"pada {len(args.seeds)} seeds × {len(args.profiles)} profiles "
-            f"@ training.num_epochs={int(args.hyperband_max_epochs)}.\n"
+    def run_search_phases(search_train_seed: int) -> None:
+        save_experiment_meta(
+            out_root,
+            {"search_train_seed": int(search_train_seed)},
         )
-        run_grid_for_configs([winner_cfg])
+        for epoch_mode in search_epoch_modes:
+            run_random_search_phase(epoch_mode, search_train_seed)
 
     if args.baseline_only:
-        run_grid_for_configs([baseline_cfg])
-    elif args.hyperband_only:
-        run_hyperband_phase()
+        run_baseline_grid()
+    elif search_only:
+        search_seed = resolve_search_train_seed(require_baseline=False)
+        run_search_phases(search_seed)
     else:
-        run_grid_for_configs([baseline_cfg])
-        run_hyperband_phase()
+        run_baseline_grid()
+        search_seed = resolve_search_train_seed(require_baseline=True)
+        metric_col = "test_success_rate_total"
+        save_experiment_meta(
+            out_root,
+            {
+                "search_train_seed": int(search_seed),
+                "search_profile": search_profile,
+                "metric": metric_col,
+            },
+        )
+        if int(args.search_train_seed) < 0:
+            save_experiment_meta(out_root, {"best_baseline_seed": int(search_seed)})
+        print(
+            f"\n>>> Random search: seed={search_seed}, profil={search_profile!r}\n"
+        )
+        run_search_phases(search_seed)
 
     summarize_script = SCRIPT_DIR / "summarize.py"
     plot_script = SCRIPT_DIR / "plot_results.py"
