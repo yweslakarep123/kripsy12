@@ -110,6 +110,32 @@ class KitchenRunner(BaseRunner):
         self.logger_util_test = logger_util.LargestKRecorder(K=3)
         self.logger_util_test10 = logger_util.LargestKRecorder(K=5)
         self._env_closed = False
+        self._obs_mode = obs_mode
+        # #region agent log
+        try:
+            with open(
+                "/home/daffa/Documents/kripsy12/.cursor/debug-8a2c7a.log", "a"
+            ) as _lf:
+                _lf.write(
+                    json.dumps(
+                        {
+                            "sessionId": "8a2c7a",
+                            "location": "kitchen_runner.py:__init__",
+                            "message": "KitchenRunner env config",
+                            "data": {
+                                "obs_mode": obs_mode,
+                                "n_obs_steps": n_obs_steps,
+                                "num_points": num_points,
+                            },
+                            "hypothesisId": "H1,H3",
+                            "timestamp": int(time.time() * 1000),
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+        # #endregion
 
     @staticmethod
     def _obs_to_policy_input(obs_dict: dict) -> dict:
@@ -119,6 +145,47 @@ class KitchenRunner(BaseRunner):
             out["agent_pos"] = obs_dict["agent_pos"].unsqueeze(0)
         if "point_cloud" in obs_dict:
             out["point_cloud"] = obs_dict["point_cloud"].unsqueeze(0)
+        # #region agent log
+        if not getattr(KitchenRunner, "_dbg_obs_logged", False):
+            KitchenRunner._dbg_obs_logged = True
+            try:
+                with open(
+                    "/home/daffa/Documents/kripsy12/.cursor/debug-8a2c7a.log", "a"
+                ) as _lf:
+                    _lf.write(
+                        json.dumps(
+                            {
+                                "sessionId": "8a2c7a",
+                                "location": "kitchen_runner.py:_obs_to_policy_input",
+                                "message": "eval obs shapes before policy",
+                                "data": {
+                                    "keys_in": list(obs_dict.keys()),
+                                    "keys_out": list(out.keys()),
+                                    "agent_pos_shape": (
+                                        list(out["agent_pos"].shape)
+                                        if "agent_pos" in out
+                                        else None
+                                    ),
+                                    "agent_pos_numel": (
+                                        int(out["agent_pos"].numel())
+                                        if "agent_pos" in out
+                                        else None
+                                    ),
+                                    "point_cloud_shape": (
+                                        list(out["point_cloud"].shape)
+                                        if "point_cloud" in out
+                                        else None
+                                    ),
+                                },
+                                "hypothesisId": "H1,H2,H5",
+                                "timestamp": int(time.time() * 1000),
+                            }
+                        )
+                        + "\n"
+                    )
+            except Exception:
+                pass
+        # #endregion
         return out
 
     def close(self):

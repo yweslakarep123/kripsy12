@@ -26,6 +26,7 @@ env_runner:
   device: ${training.device}
   use_point_crop: ${policy.use_point_crop}
   num_points: 512
+  obs_mode: point_cloud
   max_steps: 280
   tasks_to_complete:
     - microwave
