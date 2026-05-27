@@ -44,15 +44,13 @@ def append_kitchen_policy_hparam_overrides(
     odl: List[str],
     cfg: Dict[str, Any],
 ) -> None:
-    """Override Hydra untuk Franka Kitchen point-cloud + ruang pencarian.
+    """Override Hydra hiperparameter pencarian untuk Franka Kitchen point-cloud.
 
-    Memaksa ``obs_encoder_type=pointnet``, ``obs_mode=point_cloud``, dan
-    ``num_points=512`` selaras ``franka_kitchen_complete4``.
-    ``_state_mlp_hidden`` → ``policy.encoder_output_dim`` (keluaran PointNet).
+    Point cloud sudah aktif via ``shape_meta`` + ``KitchenRunner`` /
+    ``FrankaKitchenPointCloudEnv`` (default 512 pts). Jangan override key
+    yang tidak ada di struct Hydra (mis. ``policy.obs_encoder_type``).
+    ``_state_mlp_hidden`` → ``policy.encoder_output_dim``.
     """
-    odl.append("policy.obs_encoder_type=pointnet")
-    odl.append("task.env_runner.obs_mode=point_cloud")
-    odl.append(f"task.env_runner.num_points={KITCHEN_NUM_POINTS}")
     for k in CSV_HPARAM_KEYS:
         if k in ("cfg_idx", "training.num_epochs"):
             continue
@@ -83,13 +81,17 @@ SEARCH_CFG_IDX_BASE = 1000
 SEARCH_CFG_IDX_BASE_EPOCH_3000 = 2000
 HYPERBAND_CFG_IDX_BASE = SEARCH_CFG_IDX_BASE
 
-# Profil preprocessing tunggal (standard = noise observasi; tidak dipakai).
+# Profil baseline (tanpa augmentasi noise).
 DEFAULT_PREPROCESSING_PROFILE = "minimal"
+# Profil random search (standard = noise observasi std=0.01 pada train).
+DEFAULT_SEARCH_PREPROCESSING_PROFILE = "standard"
+# Seed training random search (tanpa perlu baseline sebelumnya).
+DEFAULT_SEARCH_TRAIN_SEED = 101
 
-# Mode random search: anchor epoch terpisah per fase.
+# Mode random search: satu epoch tetap per fase (hanya 5000 atau 3000).
 EPOCH_SEARCH_MODES: Dict[str, Dict[str, Any]] = {
-    "epoch_5000": {"choices": [4500, 5000, 5500], "center": 5000},
-    "epoch_3000": {"choices": [2500, 3000, 3500], "center": 3000},
+    "epoch_5000": {"choices": [5000], "center": 5000},
+    "epoch_3000": {"choices": [3000], "center": 3000},
 }
 
 EPOCH_SEARCH_STATE_FILES: Dict[str, str] = {
@@ -104,7 +106,7 @@ EPOCH_SEARCH_CFG_IDX_BASE: Dict[str, int] = {
 
 # Ruang pencarian lokal random search — setiap list HARUS mencakup nilai baseline.
 LOCAL_SEARCH_SPACE: Dict[str, List[Any]] = {
-    "training.num_epochs": [1000, 2000, 2500, 3000, 3500, 4000, 5000],
+    "training.num_epochs": [3000, 5000],
     "optimizer.lr": [5e-5, 1e-4, 2e-4, 5e-4],
     "dataloader.batch_size": [64, 128, 256, 512],
     "policy.Conditional_ConsistencyFM.num_segments": [1, 2, 3],

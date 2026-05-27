@@ -12,6 +12,33 @@ from experiment_constants import (
     compute_horizon,
 )
 
+_DEBUG_LOG = "/home/daffa/Documents/kripsy12/.cursor/debug-8a2c7a.log"
+
+
+def _dbg_log(location: str, message: str, data: dict, hypothesis_id: str = "A") -> None:
+    # #region agent log
+    import json
+    import time
+
+    try:
+        with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "sessionId": "8a2c7a",
+                        "location": location,
+                        "message": message,
+                        "data": data,
+                        "hypothesisId": hypothesis_id,
+                        "timestamp": int(time.time() * 1000),
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
+
 
 def build_train_overrides(
     cfg: Dict[str, Any],
@@ -72,5 +99,22 @@ def build_train_overrides(
     else:
         odl.append("training.rollout_every=999999")
 
+    odl.append(f"training.num_epochs={int(cfg['training.num_epochs'])}")
     append_kitchen_policy_hparam_overrides(odl, cfg)
+    _dbg_log(
+        "train_overrides.py:build_train_overrides",
+        "hydra overrides built",
+        {
+            "enable_early_stop": enable_early_stop,
+            "early_stop_in_odl": any("early_stop" in x for x in odl),
+            "invalid_policy_keys": [
+                x for x in odl if "obs_encoder_type" in x or "obs_mode" in x
+            ],
+            "rollout_every": early_stop_rollout_every if enable_early_stop else 999999,
+            "num_epochs": int(cfg["training.num_epochs"]),
+            "profile": profile,
+            "seed": seed,
+        },
+        hypothesis_id="D",
+    )
     return odl

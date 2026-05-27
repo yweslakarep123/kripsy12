@@ -4,8 +4,8 @@ Orkestrator eksperimen (tanpa k-fold, satu partisi train/val/test):
 
   1) Baseline — hyperparameter default × 3 seed × profil minimal
   2) Pilih seed baseline terbaik (test success_rate_total)
-  3) Random search epoch~5000 — 10 trial near baseline HP, seed terpilih
-  4) Random search epoch~3000 — 10 trial near baseline HP, seed sama
+  3) Random search @ epoch 5000 — N trial near baseline HP, seed terpilih
+  4) Random search @ epoch 3000 — N trial near baseline HP, seed sama
 
 Setiap run (baseline + trial search): training + inferensi + results.csv.
 
@@ -46,6 +46,8 @@ from experiment_constants import (  # noqa: E402
     BASELINE_CFG_IDX,
     CSV_HPARAM_KEYS,
     DEFAULT_PREPROCESSING_PROFILE,
+    DEFAULT_SEARCH_PREPROCESSING_PROFILE,
+    DEFAULT_SEARCH_TRAIN_SEED,
     EPOCH_SEARCH_MODES,
     RESULTS_CSV_METRIC_COLUMNS,
     baseline_config_dict,
@@ -707,9 +709,18 @@ def main():
     ap.add_argument(
         "--search-train-seed",
         type=int,
-        default=None,
-        help="Override seed training fase random search. "
-        "Default: seed baseline terbaik dari results.csv.",
+        default=DEFAULT_SEARCH_TRAIN_SEED,
+        help="Seed training fase random search (default: "
+        f"{DEFAULT_SEARCH_TRAIN_SEED}). Set -1 untuk pilih otomatis dari "
+        "results.csv baseline terbaik.",
+    )
+    ap.add_argument(
+        "--search-profile",
+        type=str,
+        default=DEFAULT_SEARCH_PREPROCESSING_PROFILE,
+        choices=["standard", "minimal"],
+        help="Profil preprocessing random search (default: "
+        f"{DEFAULT_SEARCH_PREPROCESSING_PROFILE!r}).",
     )
     ap.add_argument(
         "--disable-early-stop",
@@ -750,7 +761,8 @@ def main():
     if args.baseline_only and search_only:
         ap.error("--baseline-only dan --search-only/--hyperband-only saling meniadakan.")
 
-    profile = DEFAULT_PREPROCESSING_PROFILE
+    baseline_profile = DEFAULT_PREPROCESSING_PROFILE
+    search_profile = str(args.search_profile)
     search_epoch_modes = ["epoch_5000", "epoch_3000"]
 
     out_root = (REPO_ROOT / args.output_dir).resolve()
@@ -812,7 +824,7 @@ def main():
     if args.baseline_only:
         print(
             "\n>>> Mode --baseline-only: hanya baseline "
-            f"({n_base} run, profil={profile!r}). Random search dilewati.\n"
+            f"({n_base} run, profil={baseline_profile!r}). Random search dilewati.\n"
             "    Satu partisi train/val, tanpa k-fold.\n"
             f"    Early stop: {'on' if enable_early_stop else 'off'}, "
             f"rollout_every={args.early_stop_rollout_every}\n"
@@ -825,8 +837,9 @@ def main():
             "\n>>> Mode --search-only: dua fase random search "
             f"({n_search_total} trial total).\n"
             "    Baseline dilewati.\n"
-            f"    Fase 1: epoch~5000 ({args.random_search_n} trial)\n"
-            f"    Fase 2: epoch~3000 ({args.random_search_n} trial)\n"
+            f"    Fase 1: epoch=5000 ({args.random_search_n} trial)\n"
+            f"    Fase 2: epoch=3000 ({args.random_search_n} trial)\n"
+            f"    Train seed={args.search_train_seed}, profil={search_profile!r}\n"
             f"    N={args.random_search_n}, sampling_seed={args.random_search_seed}, "
             f"sigma={args.random_search_sigma}\n"
             f"    Early stop: {'on' if enable_early_stop else 'off'}, "
@@ -837,11 +850,14 @@ def main():
     else:
         print(
             "\n>>> Urutan: (1) Baseline "
-            f"({n_base} run) → (2) pilih seed terbaik → "
-            f"(3) random search epoch~5000 ({args.random_search_n} trial) → "
-            f"(4) random search epoch~3000 ({args.random_search_n} trial). "
+            f"({n_base} run) → "
+            f"(2) random search epoch=5000 ({args.random_search_n} trial) → "
+            f"(3) random search epoch=3000 ({args.random_search_n} trial). "
             "Satu partisi train/val, tanpa k-fold.\n"
-            f"    Profil: {profile!r} (tanpa augmentasi noise).\n"
+            f"    Baseline profil: {baseline_profile!r}; "
+            f"random search: profil={search_profile!r}, "
+            f"seed={args.search_train_seed} "
+            "(set --search-train-seed -1 untuk pilih dari baseline).\n"
             f"    Random search: N={args.random_search_n}/fase, "
             f"sampling_seed={args.random_search_seed}, sigma={args.random_search_sigma}\n"
             f"    Early stop: {'on' if enable_early_stop else 'off'}, "
@@ -853,12 +869,12 @@ def main():
 
     def run_baseline_grid() -> None:
         for seed in args.seeds:
-            run_name = f"baseline_seed{seed}_{profile}"
+            run_name = f"baseline_seed{seed}_{baseline_profile}"
             execute_one_job(
                 cfg=baseline_cfg,
                 cfg_idx=BASELINE_CFG_IDX,
                 seed=seed,
-                profile=profile,
+                profile=baseline_profile,
                 fold_i=split_fold_idx,
                 fold_entry=fold_entry,
                 run_name=run_name,
@@ -882,7 +898,7 @@ def main():
             )
 
     def resolve_search_train_seed(*, require_baseline: bool) -> int:
-        if args.search_train_seed is not None:
+        if int(args.search_train_seed) >= 0:
             return int(args.search_train_seed)
         return pick_best_baseline_seed(
             results_csv,
@@ -895,7 +911,7 @@ def main():
         print(
             f"\n>>> Random search fase {epoch_mode} "
             f"(epoch center={spec['center']}, seed={search_train_seed}, "
-            f"N={args.random_search_n}).\n"
+            f"profile={search_profile!r}, N={args.random_search_n}).\n"
         )
         best = run_random_search(
             out_root=out_root,
@@ -903,7 +919,7 @@ def main():
             n_trials=int(args.random_search_n),
             sampling_seed=int(args.random_search_seed),
             search_train_seed=int(search_train_seed),
-            search_profile=profile,
+            search_profile=search_profile,
             train_eps=fold_entry["train_episodes"],
             val_eps=fold_entry["val_episodes"],
             zarr_rel=args.zarr_path,
@@ -963,12 +979,15 @@ def main():
         save_experiment_meta(
             out_root,
             {
-                "best_baseline_seed": int(search_seed),
+                "search_train_seed": int(search_seed),
+                "search_profile": search_profile,
                 "metric": metric_col,
             },
         )
+        if int(args.search_train_seed) < 0:
+            save_experiment_meta(out_root, {"best_baseline_seed": int(search_seed)})
         print(
-            f"\n>>> Seed baseline terbaik untuk random search: {search_seed}\n"
+            f"\n>>> Random search: seed={search_seed}, profil={search_profile!r}\n"
         )
         run_search_phases(search_seed)
 

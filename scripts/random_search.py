@@ -242,7 +242,7 @@ def run_random_search(
         _save_state(out_root, epoch_mode, state)
         print(
             f"[random_search:{epoch_mode}] cfg_idx={cfg_idx} selesai "
-            f"success_rate={success_rate} val_loss={val_loss} rc={rc}"
+            f"success_rate={success_rate} (primary) val_loss={val_loss} rc={rc}"
         )
 
     best = _pick_best_from_state(state)

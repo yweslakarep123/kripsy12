@@ -1,5 +1,4 @@
 defaults:
-  - _self_
   - task: adroit_hammer
 
 name: train_flowpolicy
@@ -32,7 +31,7 @@ policy:
   crop_shape:
   - 84
   - 84
-  encoder_output_dim: ${oc.select:task.policy.encoder_output_dim,64}
+  encoder_output_dim: 64
   horizon: ${horizon}
   kernel_size: 5
   n_action_steps: ${n_action_steps}
@@ -43,9 +42,7 @@ policy:
 
   use_pc_color: false
   pointnet_type: "mlp"
-  # pointnet = PointNet + state MLP; state = MLP state-only (override via task.policy.*)
-  obs_encoder_type: ${oc.select:task.policy.obs_encoder_type,pointnet}
-  state_encoder_cfg: ${oc.select:task.policy.state_encoder_cfg,null}
+
 
   pointcloud_encoder_cfg:
     in_channels: 3
@@ -112,7 +109,7 @@ training:
   max_grad_norm: 1.0
   ema_decay: 0.95
   early_stop:
-    enabled: true
+    enabled: false
     eval_episodes: 10
     patience: 8
     min_delta: 0.5

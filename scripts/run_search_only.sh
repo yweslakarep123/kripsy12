@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Eksperimen penuh: (1) baseline 3 seed → (2) random search epoch=5000 →
-# (3) random search epoch=3000.
+# Hanya dua fase random search (epoch 5000 lalu 3000), tanpa baseline.
 #
-# Random search default: seed=101, profil=standard.
-# Epoch random search: hanya 5000 dan 3000 (satu nilai tetap per fase).
+# Default: seed=101, profil=standard, N=10 trial/fase, sigma=1.0.
+# Pilih seed dari baseline: --search-train-seed -1
 #
-# Dari akar repositori: ./scripts/run_experiment.sh
+# Dari akar repositori: ./scripts/run_search_only.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 exec python3 scripts/run_experiment.py \
+  --search-only \
   --seeds 0 42 101 \
   --search-train-seed 101 \
   --search-profile standard \

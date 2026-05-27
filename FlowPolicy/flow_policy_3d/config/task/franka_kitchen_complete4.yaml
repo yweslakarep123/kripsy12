@@ -25,16 +25,13 @@ env_runner:
   task_name: ${task_name}
   device: ${training.device}
   use_point_crop: ${policy.use_point_crop}
-  obs_mode: point_cloud
   num_points: 512
   max_steps: 280
-  tasks_to_complete: null
-  task_completion_order:
+  tasks_to_complete:
     - microwave
     - kettle
-    - light switch
     - slide cabinet
-  terminate_on_tasks_completed: false
+    - light switch
 
 dataset:
   _target_: flow_policy_3d.dataset.kitchen_dataset.KitchenDataset

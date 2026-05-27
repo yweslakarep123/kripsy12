@@ -449,13 +449,12 @@ class TrainFlowPolicyWorkspace:
                     env_runner, "run_eval_metrics"
                 )
                 if use_task_metrics:
-                    n_rollout_eps = es_eval_episodes
                     runner_log = env_runner.run_eval_metrics(
                         policy,
                         warmup_predict_steps=5,
                         eval_seed=int(cfg.training.seed),
                         log_video=False,
-                        n_episodes=n_rollout_eps,
+                        n_episodes=es_eval_episodes,
                     )
                     runner_log["mean_success_rates"] = (
                         runner_log.get("success_rate_k4", 0.0) / 100.0

@@ -18,6 +18,33 @@ from experiment_constants import (
 from infer_utils import run_infer_subprocess
 from train_overrides import build_train_overrides
 
+_DEBUG_LOG = "/home/daffa/Documents/kripsy12/.cursor/debug-8a2c7a.log"
+
+
+def _dbg_log(location: str, message: str, data: dict, hypothesis_id: str = "B") -> None:
+    # #region agent log
+    import json
+    import time
+
+    try:
+        with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "sessionId": "8a2c7a",
+                        "location": location,
+                        "message": message,
+                        "data": data,
+                        "hypothesisId": hypothesis_id,
+                        "timestamp": int(time.time() * 1000),
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
+
 
 def read_val_loss_final(run_dir: pathlib.Path) -> Optional[float]:
     p = run_dir / "training_final.json"
@@ -238,6 +265,12 @@ def run_search_trial(
 
         cmd = [py, str(train_py)] + overrides
         rc = subprocess.run(cmd, cwd=cwd_train, env=env).returncode
+        _dbg_log(
+            "search_training.py:run_search_trial",
+            "train subprocess finished",
+            {"cfg_idx": cfg_idx, "returncode": rc, "run_dir": str(run_dir)},
+            hypothesis_id="B",
+        )
         if rc != 0:
             if results_csv is not None and hp_cols is not None:
                 append_search_results_csv(
@@ -322,6 +355,17 @@ def run_search_trial(
         return None, val_loss, rc2, target_epochs
 
     success_rate = read_test_success_rate(run_dir)
+    _dbg_log(
+        "search_training.py:run_search_trial",
+        "trial complete",
+        {
+            "cfg_idx": cfg_idx,
+            "test_success_rate_total": success_rate,
+            "val_loss_final": val_loss,
+            "infer_rc": rc2,
+        },
+        hypothesis_id="C",
+    )
     if results_csv is not None and hp_cols is not None:
         append_search_results_csv(
             results_csv,
