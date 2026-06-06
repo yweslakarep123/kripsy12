@@ -29,6 +29,27 @@ class KitchenRunner(BaseRunner):
         "slide cabinet",  # k4
     )
 
+    @staticmethod
+    def k_level_specs_from_order(task_completion_order) -> tuple:
+        """k_i = {task[0], …, task[i-1]} selesai berurutan."""
+        order = (
+            tuple(task_completion_order)
+            if task_completion_order
+            else KitchenRunner.CANONICAL_TASK_ORDER
+        )
+        prefix: list = []
+        specs = []
+        for task in order:
+            prefix.append(task)
+            specs.append(frozenset(prefix))
+        return tuple(specs)
+
+    @staticmethod
+    def task_order_from_completion_order(task_completion_order) -> tuple:
+        if task_completion_order:
+            return tuple(task_completion_order)
+        return KitchenRunner.CANONICAL_TASK_ORDER
+
     def __init__(
         self,
         output_dir,
@@ -47,12 +68,17 @@ class KitchenRunner(BaseRunner):
         device="cuda",
         use_point_crop=True,
         num_points=512,
+        obs_mode: str = "state",
         tasks_to_complete=None,
         task_completion_order=None,
         terminate_on_tasks_completed=True,
     ):
         super().__init__(output_dir)
         self.task_name = task_name
+        self.k_level_specs = self.k_level_specs_from_order(task_completion_order)
+        self.task_order_list = self.task_order_from_completion_order(
+            task_completion_order
+        )
 
         def env_fn():
             return MultiStepWrapper(
@@ -61,6 +87,7 @@ class KitchenRunner(BaseRunner):
                         tasks_to_complete=tasks_to_complete,
                         task_completion_order=task_completion_order,
                         device=device,
+                        obs_mode=obs_mode,
                         use_point_crop=use_point_crop,
                         num_points=num_points,
                         terminate_on_tasks_completed=terminate_on_tasks_completed,
@@ -92,6 +119,83 @@ class KitchenRunner(BaseRunner):
         self.logger_util_test = logger_util.LargestKRecorder(K=3)
         self.logger_util_test10 = logger_util.LargestKRecorder(K=5)
         self._env_closed = False
+        self._obs_mode = obs_mode
+        # #region agent log
+        try:
+            with open(
+                "/home/daffa/Documents/kripsy12/.cursor/debug-8a2c7a.log", "a"
+            ) as _lf:
+                _lf.write(
+                    json.dumps(
+                        {
+                            "sessionId": "8a2c7a",
+                            "location": "kitchen_runner.py:__init__",
+                            "message": "KitchenRunner env config",
+                            "data": {
+                                "obs_mode": obs_mode,
+                                "n_obs_steps": n_obs_steps,
+                                "num_points": num_points,
+                            },
+                            "hypothesisId": "H1,H3",
+                            "timestamp": int(time.time() * 1000),
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+        # #endregion
+
+    @staticmethod
+    def _obs_to_policy_input(obs_dict: dict) -> dict:
+        """Bangun input policy dari dict obs env (hanya key yang ada)."""
+        out = {}
+        if "agent_pos" in obs_dict:
+            out["agent_pos"] = obs_dict["agent_pos"].unsqueeze(0)
+        if "point_cloud" in obs_dict:
+            out["point_cloud"] = obs_dict["point_cloud"].unsqueeze(0)
+        # #region agent log
+        if not getattr(KitchenRunner, "_dbg_obs_logged", False):
+            KitchenRunner._dbg_obs_logged = True
+            try:
+                with open(
+                    "/home/daffa/Documents/kripsy12/.cursor/debug-8a2c7a.log", "a"
+                ) as _lf:
+                    _lf.write(
+                        json.dumps(
+                            {
+                                "sessionId": "8a2c7a",
+                                "location": "kitchen_runner.py:_obs_to_policy_input",
+                                "message": "eval obs shapes before policy",
+                                "data": {
+                                    "keys_in": list(obs_dict.keys()),
+                                    "keys_out": list(out.keys()),
+                                    "agent_pos_shape": (
+                                        list(out["agent_pos"].shape)
+                                        if "agent_pos" in out
+                                        else None
+                                    ),
+                                    "agent_pos_numel": (
+                                        int(out["agent_pos"].numel())
+                                        if "agent_pos" in out
+                                        else None
+                                    ),
+                                    "point_cloud_shape": (
+                                        list(out["point_cloud"].shape)
+                                        if "point_cloud" in out
+                                        else None
+                                    ),
+                                },
+                                "hypothesisId": "H1,H2,H5",
+                                "timestamp": int(time.time() * 1000),
+                            }
+                        )
+                        + "\n"
+                    )
+            except Exception:
+                pass
+        # #endregion
+        return out
 
     def close(self):
         """Tutup sim + renderer MuJoCo (EGL) agar tidak bergantung pada __del__ saat shutdown."""
@@ -195,10 +299,7 @@ class KitchenRunner(BaseRunner):
         obs_dict = dict_apply(
             np_obs_dict, lambda x: torch.from_numpy(x).to(device=device)
         )
-        obs_dict_input = {
-            "point_cloud": obs_dict["point_cloud"].unsqueeze(0),
-            "agent_pos": obs_dict["agent_pos"].unsqueeze(0),
-        }
+        obs_dict_input = self._obs_to_policy_input(obs_dict)
         for _ in range(max(0, warmup_predict_steps)):
             predict_timed(obs_dict_input)
 
@@ -240,10 +341,7 @@ class KitchenRunner(BaseRunner):
                 obs_dict = dict_apply(
                     np_obs_dict, lambda x: torch.from_numpy(x).to(device=device)
                 )
-                obs_dict_input = {
-                    "point_cloud": obs_dict["point_cloud"].unsqueeze(0),
-                    "agent_pos": obs_dict["agent_pos"].unsqueeze(0),
-                }
+                obs_dict_input = self._obs_to_policy_input(obs_dict)
                 action_dict = predict_timed(obs_dict_input)
                 np_action_dict = dict_apply(
                     action_dict, lambda x: x.detach().to("cpu").numpy()
@@ -402,9 +500,7 @@ class KitchenRunner(BaseRunner):
                 )
 
                 with torch.no_grad():
-                    obs_dict_input = {}
-                    obs_dict_input["point_cloud"] = obs_dict["point_cloud"].unsqueeze(0)
-                    obs_dict_input["agent_pos"] = obs_dict["agent_pos"].unsqueeze(0)
+                    obs_dict_input = self._obs_to_policy_input(obs_dict)
                     start_time = time.time()
                     action_dict = policy.predict_action(obs_dict_input)
                     end_time = time.time()

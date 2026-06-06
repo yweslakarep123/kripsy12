@@ -60,6 +60,11 @@ def main():
     p.add_argument("--device", type=str, default="cuda:0")
     p.add_argument("--max-steps", type=int, default=280)
     p.add_argument("--num-points", type=int, default=512)
+    p.add_argument(
+        "--point-cloud",
+        action="store_true",
+        help="Sertakan point_cloud di zarr (default: state-only 59-d).",
+    )
     args = p.parse_args()
 
     if args.sequential and args.tasks:
@@ -70,20 +75,23 @@ def main():
         shutil.rmtree(out_path)
 
     rng = np.random.default_rng(args.seed)
+    obs_mode = "point_cloud" if args.point_cloud else "state"
+    env_kw = dict(
+        device=args.device,
+        obs_mode=obs_mode,
+        num_points=args.num_points,
+        max_episode_steps=args.max_steps,
+    )
     if args.sequential:
         env = FrankaKitchenPointCloudEnv(
             task_completion_order=SEQUENTIAL_FOUR,
-            device=args.device,
-            num_points=args.num_points,
-            max_episode_steps=args.max_steps,
+            **env_kw,
         )
     else:
         tasks = args.tasks if args.tasks else None
         env = FrankaKitchenPointCloudEnv(
             tasks_to_complete=tasks,
-            device=args.device,
-            num_points=args.num_points,
-            max_episode_steps=args.max_steps,
+            **env_kw,
         )
 
     store = zarr.DirectoryStore(out_path)
@@ -98,7 +106,8 @@ def main():
             states, actions, clouds = [], [], []
             while not done:
                 states.append(obs["agent_pos"].copy())
-                clouds.append(obs["point_cloud"].copy())
+                if args.point_cloud:
+                    clouds.append(obs["point_cloud"].copy())
                 a = env.action_space.sample()
                 a = rng.normal(0, 0.3, size=a.shape).astype(np.float32)
                 a = np.clip(a, env.action_space.low, env.action_space.high)
@@ -109,8 +118,9 @@ def main():
             ep_data = {
                 "state": np.stack(states, axis=0).astype(np.float32),
                 "action": np.stack(actions, axis=0).astype(np.float32),
-                "point_cloud": np.stack(clouds, axis=0).astype(np.float32),
             }
+            if args.point_cloud:
+                ep_data["point_cloud"] = np.stack(clouds, axis=0).astype(np.float32)
             buffer.add_episode(ep_data)
             print(f"episode {ep+1}/{args.episodes} length={len(actions)}")
     finally:
