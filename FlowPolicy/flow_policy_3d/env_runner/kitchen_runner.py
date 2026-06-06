@@ -20,23 +20,26 @@ from termcolor import cprint
 
 
 class KitchenRunner(BaseRunner):
-    """Metrik success_rate_k1…k4: prefix tugas selesai (urutan sequential atau multitask legacy)."""
+    """Urutan sub-tugas untuk metrik success_rate_k1…k4 (per-task individual)."""
 
-    K_LEVEL_SPECS_MULTITASK = (
-        frozenset({"microwave"}),
-        frozenset({"microwave", "light switch"}),
-        frozenset({"microwave", "light switch", "kettle"}),
-        frozenset({"microwave", "light switch", "kettle", "slide cabinet"}),
+    CANONICAL_TASK_ORDER = (
+        "microwave",      # k1
+        "kettle",         # k2
+        "light switch",   # k3
+        "slide cabinet",  # k4
     )
 
     @staticmethod
     def k_level_specs_from_order(task_completion_order) -> tuple:
         """k_i = {task[0], …, task[i-1]} selesai berurutan."""
-        if not task_completion_order:
-            return KitchenRunner.K_LEVEL_SPECS_MULTITASK
+        order = (
+            tuple(task_completion_order)
+            if task_completion_order
+            else KitchenRunner.CANONICAL_TASK_ORDER
+        )
         prefix: list = []
         specs = []
-        for task in task_completion_order:
+        for task in order:
             prefix.append(task)
             specs.append(frozenset(prefix))
         return tuple(specs)
@@ -45,7 +48,7 @@ class KitchenRunner(BaseRunner):
     def task_order_from_completion_order(task_completion_order) -> tuple:
         if task_completion_order:
             return tuple(task_completion_order)
-        return ("microwave", "light switch", "kettle", "slide cabinet")
+        return KitchenRunner.CANONICAL_TASK_ORDER
 
     def __init__(
         self,
@@ -98,6 +101,12 @@ class KitchenRunner(BaseRunner):
             )
 
         self.eval_episodes = eval_episodes
+        if task_completion_order:
+            self._task_order = tuple(task_completion_order)
+        elif tasks_to_complete:
+            self._task_order = tuple(tasks_to_complete)
+        else:
+            self._task_order = self.CANONICAL_TASK_ORDER
         self.env = env_fn()
 
         self.fps = fps
@@ -297,10 +306,13 @@ class KitchenRunner(BaseRunner):
         latencies_ms.clear()
         current_ep_lat_ms.clear()
 
-        ep_success_levels = []
-        per_task_hits = {t: [] for t in self.task_order_list}
+        ep_task_success = []
+        ep_total_success = []
         per_episode_mean_inference_latency_ms: list[float] = []
+        per_episode_execution_time_ms: list[float] = []
+        per_episode_task_completion_ms: list[dict[str, float | None]] = []
         n_eps = int(self.eval_episodes if n_episodes is None else n_episodes)
+        task_order = self._task_order
         video_root = (
             pathlib.Path(save_inference_videos_dir).resolve()
             if save_inference_videos_dir
@@ -319,6 +331,11 @@ class KitchenRunner(BaseRunner):
 
             done = False
             last_completions = set()
+            prev_completions = set()
+            task_completion_ms: dict[str, float | None] = {
+                task: None for task in task_order
+            }
+            ep_t0 = time.perf_counter()
             while not done:
                 np_obs_dict = dict(obs)
                 obs_dict = dict_apply(
@@ -333,14 +350,24 @@ class KitchenRunner(BaseRunner):
 
                 obs, reward, done, info = env.step(action)
                 done = np.all(done)
-                last_completions |= self._completion_set_from_info(info)
+                curr_completions = self._completion_set_from_info(info)
+                for task in curr_completions - prev_completions:
+                    if task in task_completion_ms and task_completion_ms[task] is None:
+                        task_completion_ms[task] = (
+                            time.perf_counter() - ep_t0
+                        ) * 1000.0
+                prev_completions = curr_completions
+                last_completions |= curr_completions
 
-            levels_met = [
-                spec.issubset(last_completions) for spec in self.k_level_specs
+            ep_wall_ms = (time.perf_counter() - ep_t0) * 1000.0
+            per_episode_execution_time_ms.append(ep_wall_ms)
+            per_episode_task_completion_ms.append(task_completion_ms)
+
+            task_success = [
+                task in last_completions for task in task_order
             ]
-            ep_success_levels.append(levels_met)
-            for task in self.task_order_list:
-                per_task_hits[task].append(float(task in last_completions))
+            ep_task_success.append(task_success)
+            ep_total_success.append(all(task_success))
 
             ep_mean = (
                 float(np.mean(current_ep_lat_ms)) if current_ep_lat_ms else 0.0
@@ -354,38 +381,58 @@ class KitchenRunner(BaseRunner):
                 out_mp4 = video_root / f"infer_ep_{episode_idx:03d}.mp4"
                 self._save_rgb_video_mp4(out_mp4, videos, self.fps)
 
-        sr = np.asarray(ep_success_levels, dtype=np.float64)
+        sr_tasks = np.asarray(ep_task_success, dtype=np.float64)
+        sr_total = np.asarray(ep_total_success, dtype=np.float64)
         mean_lat = float(np.mean(latencies_ms)) if latencies_ms else 0.0
         std_lat = float(np.std(latencies_ms)) if latencies_ms else 0.0
         ep_means_arr = np.asarray(per_episode_mean_inference_latency_ms, dtype=np.float64)
         mean_episode_mean_lat = float(np.mean(ep_means_arr)) if len(ep_means_arr) else 0.0
         std_episode_mean_lat = float(np.std(ep_means_arr)) if len(ep_means_arr) else 0.0
-        # Sukses penuh Kitchen-Complete (empat sub-tugas terurut) = level k4.
-        success_total_pct = float(sr[:, 3].mean() * 100.0)
+        exec_arr = np.asarray(per_episode_execution_time_ms, dtype=np.float64)
+        mean_exec = float(np.mean(exec_arr)) if len(exec_arr) else 0.0
+        std_exec = float(np.std(exec_arr)) if len(exec_arr) else 0.0
+        total_exec = float(np.sum(exec_arr)) if len(exec_arr) else 0.0
+
         out = {
-            "success_rate_total": success_total_pct,
-            "success_rate_k1": float(sr[:, 0].mean() * 100.0),
-            "success_rate_k2": float(sr[:, 1].mean() * 100.0),
-            "success_rate_k3": float(sr[:, 2].mean() * 100.0),
-            "success_rate_k4": float(sr[:, 3].mean() * 100.0),
-        }
-        for task in self.task_order_list:
-            key = f"success_rate_task_{task.replace(' ', '_')}"
-            hits = per_task_hits[task]
-            out[key] = float(np.mean(hits) * 100.0) if hits else 0.0
-        out.update({
+            "success_rate_total": float(sr_total.mean() * 100.0),
+            "std_success_rate_total": float(sr_total.std() * 100.0),
+            "success_rate_k1": float(sr_tasks[:, 0].mean() * 100.0),
+            "success_rate_k2": float(sr_tasks[:, 1].mean() * 100.0),
+            "success_rate_k3": float(sr_tasks[:, 2].mean() * 100.0),
+            "success_rate_k4": float(sr_tasks[:, 3].mean() * 100.0),
+            "std_success_rate_k1": float(sr_tasks[:, 0].std() * 100.0),
+            "std_success_rate_k2": float(sr_tasks[:, 1].std() * 100.0),
+            "std_success_rate_k3": float(sr_tasks[:, 2].std() * 100.0),
+            "std_success_rate_k4": float(sr_tasks[:, 3].std() * 100.0),
             "mean_inference_latency_ms": mean_lat,
             "std_inference_latency_ms": std_lat,
             "per_episode_mean_inference_latency_ms": per_episode_mean_inference_latency_ms,
             "mean_episode_mean_inference_latency_ms": mean_episode_mean_lat,
             "std_episode_mean_inference_latency_ms": std_episode_mean_lat,
+            "mean_execution_time_ms": mean_exec,
+            "std_execution_time_ms": std_exec,
+            "total_execution_time_ms": total_exec,
+            "mean_all_tasks_execution_time_ms": mean_exec,
             "n_infer_episodes": int(n_eps),
-        })
+        }
+        for ki in range(4):
+            task_times = [
+                ep_times[task_order[ki]]
+                for ep_times in per_episode_task_completion_ms
+                if ep_times.get(task_order[ki]) is not None
+            ]
+            if task_times:
+                arr = np.asarray(task_times, dtype=np.float64)
+                out[f"mean_task_execution_time_ms_k{ki + 1}"] = float(arr.mean())
+                out[f"std_task_execution_time_ms_k{ki + 1}"] = float(arr.std())
+            else:
+                out[f"mean_task_execution_time_ms_k{ki + 1}"] = 0.0
+                out[f"std_task_execution_time_ms_k{ki + 1}"] = 0.0
         out["trade_off"] = (
-            float(out["success_rate_k4"] / mean_lat) if mean_lat > 1e-9 else 0.0
+            float(out["success_rate_total"] / mean_lat) if mean_lat > 1e-9 else 0.0
         )
         out["trade_off_episode_latency"] = (
-            float(out["success_rate_k4"] / mean_episode_mean_lat)
+            float(out["success_rate_total"] / mean_episode_mean_lat)
             if mean_episode_mean_lat > 1e-9
             else 0.0
         )
@@ -397,8 +444,11 @@ class KitchenRunner(BaseRunner):
             out["sim_video_eval"] = wandb.Video(videos, fps=self.fps, format="mp4")
 
         cprint(
-            f"[run_eval_metrics] k4={out['success_rate_k4']:.2f}% "
-            f"lat_ms={mean_lat:.3f}±{std_lat:.3f}",
+            f"[run_eval_metrics] total={out['success_rate_total']:.2f}% "
+            f"k1={out['success_rate_k1']:.2f}% k2={out['success_rate_k2']:.2f}% "
+            f"k3={out['success_rate_k3']:.2f}% k4={out['success_rate_k4']:.2f}% "
+            f"lat_ms={mean_lat:.3f}±{std_lat:.3f} "
+            f"exec_ms={mean_exec:.1f}±{std_exec:.1f}",
             "green",
         )
         # #region agent log

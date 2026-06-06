@@ -379,26 +379,60 @@ RESULTS_CSV_METRIC_COLUMNS = [
     "train_val_trade_off_episode_latency",
     "train_val_n_infer_episodes",
     "test_success_rate_total",
+    "test_std_success_rate_total",
     "test_success_rate_k1",
     "test_success_rate_k2",
     "test_success_rate_k3",
     "test_success_rate_k4",
+    "test_std_success_rate_k1",
+    "test_std_success_rate_k2",
+    "test_std_success_rate_k3",
+    "test_std_success_rate_k4",
     "test_mean_inference_latency_ms",
     "test_std_inference_latency_ms",
     "test_mean_episode_mean_inference_latency_ms",
     "test_std_episode_mean_inference_latency_ms",
+    "test_mean_execution_time_ms",
+    "test_std_execution_time_ms",
+    "test_total_execution_time_ms",
+    "test_mean_all_tasks_execution_time_ms",
+    "test_mean_task_execution_time_ms_k1",
+    "test_std_task_execution_time_ms_k1",
+    "test_mean_task_execution_time_ms_k2",
+    "test_std_task_execution_time_ms_k2",
+    "test_mean_task_execution_time_ms_k3",
+    "test_std_task_execution_time_ms_k3",
+    "test_mean_task_execution_time_ms_k4",
+    "test_std_task_execution_time_ms_k4",
     "test_trade_off",
     "test_trade_off_episode_latency",
     "test_n_infer_episodes",
     "success_rate_total",
+    "std_success_rate_total",
     "success_rate_k1",
     "success_rate_k2",
     "success_rate_k3",
     "success_rate_k4",
+    "std_success_rate_k1",
+    "std_success_rate_k2",
+    "std_success_rate_k3",
+    "std_success_rate_k4",
     "mean_inference_latency_ms",
     "std_inference_latency_ms",
     "mean_episode_mean_inference_latency_ms",
     "std_episode_mean_inference_latency_ms",
+    "mean_execution_time_ms",
+    "std_execution_time_ms",
+    "total_execution_time_ms",
+    "mean_all_tasks_execution_time_ms",
+    "mean_task_execution_time_ms_k1",
+    "std_task_execution_time_ms_k1",
+    "mean_task_execution_time_ms_k2",
+    "std_task_execution_time_ms_k2",
+    "mean_task_execution_time_ms_k3",
+    "std_task_execution_time_ms_k3",
+    "mean_task_execution_time_ms_k4",
+    "std_task_execution_time_ms_k4",
     "trade_off",
     "trade_off_episode_latency",
 ]
@@ -503,10 +537,25 @@ def metrics_row_from_infer_json(met: Dict[str, Any]) -> Dict[str, Any]:
     row["test_success_rate_total"] = pick(
         "test_success_rate_total", "success_rate_total"
     )
+    row["test_std_success_rate_total"] = pick(
+        "test_std_success_rate_total", "std_success_rate_total"
+    )
     row["test_success_rate_k1"] = pick("test_success_rate_k1", "success_rate_k1")
     row["test_success_rate_k2"] = pick("test_success_rate_k2", "success_rate_k2")
     row["test_success_rate_k3"] = pick("test_success_rate_k3", "success_rate_k3")
     row["test_success_rate_k4"] = pick("test_success_rate_k4", "success_rate_k4")
+    row["test_std_success_rate_k1"] = pick(
+        "test_std_success_rate_k1", "std_success_rate_k1"
+    )
+    row["test_std_success_rate_k2"] = pick(
+        "test_std_success_rate_k2", "std_success_rate_k2"
+    )
+    row["test_std_success_rate_k3"] = pick(
+        "test_std_success_rate_k3", "std_success_rate_k3"
+    )
+    row["test_std_success_rate_k4"] = pick(
+        "test_std_success_rate_k4", "std_success_rate_k4"
+    )
     row["test_mean_inference_latency_ms"] = pick(
         "test_mean_inference_latency_ms", "mean_inference_latency_ms"
     )
@@ -521,6 +570,27 @@ def metrics_row_from_infer_json(met: Dict[str, Any]) -> Dict[str, Any]:
         "test_std_episode_mean_inference_latency_ms",
         "std_episode_mean_inference_latency_ms",
     )
+    row["test_mean_execution_time_ms"] = pick(
+        "test_mean_execution_time_ms", "mean_execution_time_ms"
+    )
+    row["test_std_execution_time_ms"] = pick(
+        "test_std_execution_time_ms", "std_execution_time_ms"
+    )
+    row["test_total_execution_time_ms"] = pick(
+        "test_total_execution_time_ms", "total_execution_time_ms"
+    )
+    row["test_mean_all_tasks_execution_time_ms"] = pick(
+        "test_mean_all_tasks_execution_time_ms", "mean_all_tasks_execution_time_ms"
+    )
+    for ki in range(1, 5):
+        row[f"test_mean_task_execution_time_ms_k{ki}"] = pick(
+            f"test_mean_task_execution_time_ms_k{ki}",
+            f"mean_task_execution_time_ms_k{ki}",
+        )
+        row[f"test_std_task_execution_time_ms_k{ki}"] = pick(
+            f"test_std_task_execution_time_ms_k{ki}",
+            f"std_task_execution_time_ms_k{ki}",
+        )
     row["test_trade_off"] = pick("test_trade_off", "trade_off")
     row["test_trade_off_episode_latency"] = pick(
         "test_trade_off_episode_latency", "trade_off_episode_latency"
@@ -532,10 +602,25 @@ def metrics_row_from_infer_json(met: Dict[str, Any]) -> Dict[str, Any]:
     row["success_rate_total"] = pick(
         "success_rate_total", "test_success_rate_total"
     )
+    row["std_success_rate_total"] = pick(
+        "std_success_rate_total", "test_std_success_rate_total"
+    )
     row["success_rate_k1"] = pick("success_rate_k1", "test_success_rate_k1")
     row["success_rate_k2"] = pick("success_rate_k2", "test_success_rate_k2")
     row["success_rate_k3"] = pick("success_rate_k3", "test_success_rate_k3")
     row["success_rate_k4"] = pick("success_rate_k4", "test_success_rate_k4")
+    row["std_success_rate_k1"] = pick(
+        "std_success_rate_k1", "test_std_success_rate_k1"
+    )
+    row["std_success_rate_k2"] = pick(
+        "std_success_rate_k2", "test_std_success_rate_k2"
+    )
+    row["std_success_rate_k3"] = pick(
+        "std_success_rate_k3", "test_std_success_rate_k3"
+    )
+    row["std_success_rate_k4"] = pick(
+        "std_success_rate_k4", "test_std_success_rate_k4"
+    )
     row["mean_inference_latency_ms"] = pick(
         "mean_inference_latency_ms", "test_mean_inference_latency_ms"
     )
@@ -550,6 +635,28 @@ def metrics_row_from_infer_json(met: Dict[str, Any]) -> Dict[str, Any]:
         "std_episode_mean_inference_latency_ms",
         "test_std_episode_mean_inference_latency_ms",
     )
+    row["mean_execution_time_ms"] = pick(
+        "mean_execution_time_ms", "test_mean_execution_time_ms"
+    )
+    row["std_execution_time_ms"] = pick(
+        "std_execution_time_ms", "test_std_execution_time_ms"
+    )
+    row["total_execution_time_ms"] = pick(
+        "total_execution_time_ms", "test_total_execution_time_ms"
+    )
+    row["mean_all_tasks_execution_time_ms"] = pick(
+        "mean_all_tasks_execution_time_ms",
+        "test_mean_all_tasks_execution_time_ms",
+    )
+    for ki in range(1, 5):
+        row[f"mean_task_execution_time_ms_k{ki}"] = pick(
+            f"mean_task_execution_time_ms_k{ki}",
+            f"test_mean_task_execution_time_ms_k{ki}",
+        )
+        row[f"std_task_execution_time_ms_k{ki}"] = pick(
+            f"std_task_execution_time_ms_k{ki}",
+            f"test_std_task_execution_time_ms_k{ki}",
+        )
     row["trade_off"] = pick("trade_off", "test_trade_off")
     row["trade_off_episode_latency"] = pick(
         "trade_off_episode_latency", "test_trade_off_episode_latency"

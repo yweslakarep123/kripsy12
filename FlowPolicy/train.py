@@ -443,7 +443,7 @@ class TrainFlowPolicyWorkspace:
             policy.eval()
 
             # run rollout
-            if (self.epoch % cfg.training.rollout_every) == 0 and RUN_ROLLOUT and env_runner is not None:
+            if self.epoch > 0 and (self.epoch % cfg.training.rollout_every) == 0 and RUN_ROLLOUT and env_runner is not None:
                 t3 = time.time()
                 use_task_metrics = early_stop_enabled and hasattr(
                     env_runner, "run_eval_metrics"
@@ -583,43 +583,6 @@ class TrainFlowPolicyWorkspace:
             self.global_step += 1
             self.epoch += 1
             del step_log
-
-        # Simulasi pasca-training (k1–k4, latensi, trade_off) — disimpan untuk digabung ke metrics.json saat inferensi.
-        training_sim_path = os.path.join(self.output_dir, "training_sim_metrics.json")
-        if env_runner is not None and hasattr(env_runner, "run_eval_metrics"):
-            policy = self.ema_model if cfg.training.use_ema else self.model
-            policy.eval()
-            policy.to(torch.device(cfg.training.device))
-            n_sim_ep = int(getattr(env_runner, "eval_episodes", 20))
-            try:
-                tsim = env_runner.run_eval_metrics(
-                    policy,
-                    warmup_predict_steps=20,
-                    eval_seed=int(cfg.training.seed),
-                    log_video=False,
-                    n_episodes=n_sim_ep,
-                )
-                with open(training_sim_path, "w") as f:
-                    json.dump(_json_safe_for_metrics(tsim), f, indent=2)
-                try:
-                    log_scalars = {}
-                    for k, v in tsim.items():
-                        if k in ("sim_video_eval", "per_episode_mean_inference_latency_ms"):
-                            continue
-                        if isinstance(v, (list, dict)):
-                            continue
-                        try:
-                            log_scalars[f"training_sim_{k}"] = float(v)
-                        except (TypeError, ValueError):
-                            pass
-                    if log_scalars:
-                        wandb_run.log(log_scalars, step=self.global_step)
-                except Exception:
-                    pass
-            except Exception as e:
-                cprint(f"[warn] training_sim_metrics gagal: {e}", "yellow")
-                with open(training_sim_path, "w") as f:
-                    json.dump({"error": str(e)}, f, indent=2)
 
         if env_runner is not None:
             env_runner.close()

@@ -31,8 +31,8 @@ env_runner:
   tasks_to_complete:
     - microwave
     - kettle
-    - slide cabinet
     - light switch
+    - slide cabinet
 
 dataset:
   _target_: flow_policy_3d.dataset.kitchen_dataset.KitchenDataset

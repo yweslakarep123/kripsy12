@@ -16,6 +16,12 @@ Flag mutually exclusive:
 
 Tanpa flag: jalankan baseline lalu kedua fase search berurutan.
 
+Metrik inferensi hanya pada fase test (default 50 episode): success total &
+k1–k4 per-task (mean+std); latensi global + rata-rata per-episod (mean+std);
+waktu pengerjaan per-task dan total (ms); ``trade_off`` dan
+``trade_off_episode_latency``. Training hanya mencatat train/val loss.
+Video: MP4 inferensi per-episod di ``inference_videos/``.
+
 Resume:
 
 - Baseline: metrik lengkap (``metrics.json``) atau ``results.csv`` ``status=ok``.
@@ -736,8 +742,8 @@ def main():
     ap.add_argument(
         "--n-train-val-episodes",
         type=int,
-        default=15,
-        help="Episode simulasi untuk metrik fase train/val (infer_kitchen); 0 = lewati.",
+        default=0,
+        help="Episode simulasi untuk metrik fase train/val (infer_kitchen); 0 = lewati (default).",
     )
     ap.add_argument(
         "--train-val-eval-seed-offset",

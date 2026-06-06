@@ -8,4 +8,6 @@ exec python3 scripts/run_experiment.py \
   --baseline-only \
   --seeds 0 42 101 \
   --cv-seed 12345 \
+  --n-infer-episodes 50 \
+  --n-train-val-episodes 0 \
   "$@"

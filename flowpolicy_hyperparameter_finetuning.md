@@ -173,24 +173,29 @@ Hasil dilaporkan sebagai **rata-rata ± simpangan baku** dari 3 seed.
 
 ## 5. Metrik Evaluasi
 
-### 5.1 Success Rate
+### 5.1 Success Rate (hanya fase test, 50 episode)
 
-#### Success Rate Total
+Evaluasi simulasi **tidak** dijalankan saat training. Metrik dihitung hanya pada
+inferensi test (default 50 episode), dengan **mean dan std** antar episode.
+
+#### Success Rate Total (keseluruhan)
 ```
-success_rate = (N_success / N_total) × 100%
+success_rate_total = (N_episode_semua_4_task / N_total) × 100%
+std_success_rate_total = std(episode_success_bool) × 100%
 ```
 
-#### Success Rate Per Sub-Tugas (k ∈ {1,2,3,4})
+#### Success Rate Per Task Individual (k ∈ {1,2,3,4})
 ```
-success_rate_k = (N_success_k / N_total) × 100%
+success_rate_k = (N_episode_task_k_selesai / N_total) × 100%
+std_success_rate_k = std(episode_task_k_bool) × 100%
 ```
 
-| k | Sub-Tugas yang Diselesaikan Secara Berurutan                          |
-|---|-----------------------------------------------------------------------|
-| 1 | Membuka pintu microwave                                               |
-| 2 | Membuka microwave + memutar knob lampu kompor                         |
-| 3 | Membuka microwave + knob + menaruh teko di kompor                     |
-| 4 | Keempat sub-tugas lengkap (+ membuka slide cabinet)                   |
+| k | Task individual |
+|---|-----------------|
+| 1 | microwave |
+| 2 | kettle |
+| 3 | light switch |
+| 4 | slide cabinet |
 
 - Batas maksimum: **280 langkah per episode**
 - Keberhasilan bersifat **biner** berdasarkan threshold konfigurasi objek
@@ -201,13 +206,30 @@ success_rate_k = (N_success_k / N_total) × 100%
 Lat = Σ (t_akhir_forward_pass_i - t_awal_forward_pass_i), i = 1..K
 ```
 
+| Metrik | Arti |
+|--------|------|
+| `mean_inference_latency_ms` | Mean semua call `predict_action` (pooled) |
+| `std_inference_latency_ms` | Std semua call individual (pooled) |
+| `mean_episode_mean_inference_latency_ms` | Mean rata-rata latensi per episode |
+| `std_episode_mean_inference_latency_ms` | Std rata-rata latensi per episode |
+
 - Latency berskala **linear** terhadap `K` (jumlah segmen)
 - Gunakan **dummy pass** (GPU warm-up) sebelum pengukuran untuk menghilangkan bias CUDA initialization
 
-### 5.3 Trade-Off Score
+### 5.3 Waktu Pengerjaan (Execution Time)
+
+| Metrik | Arti |
+|--------|------|
+| `mean_execution_time_ms` | Mean wall-clock per episode (ms) |
+| `std_execution_time_ms` | Std wall-clock per episode (ms) |
+| `total_execution_time_ms` | Total wall-clock 50 episode (ms) |
+| `mean_task_execution_time_ms_k1`…`k4` | Mean waktu sampai task selesai (hanya episode sukses task itu) |
+| `std_task_execution_time_ms_k1`…`k4` | Std waktu sampai task selesai |
+
+### 5.4 Trade-Off Score
 
 ```
-trade_off = success_rate / Lat
+trade_off = success_rate_total / Lat
 ```
 
 Nilai trade-off **lebih tinggi** = keseimbangan performa dan efisiensi komputasi **lebih baik**.
