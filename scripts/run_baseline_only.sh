@@ -9,4 +9,6 @@ exec python3 scripts/run_experiment.py \
   --seeds 0 42 101 \
   --profiles standard minimal \
   --cv-seed 12345 \
+  --n-infer-episodes 50 \
+  --n-train-val-episodes 0 \
   "$@"

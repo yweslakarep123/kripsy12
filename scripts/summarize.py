@@ -29,16 +29,18 @@ def summarize(output_dir: Path, *, results_csv: Path | None = None) -> None:
         "test_success_rate_k2", "success_rate_k2"
     ), _col("test_success_rate_k3", "success_rate_k3")
     k4 = _col("test_success_rate_k4", "success_rate_k4")
+    k_total = _col("test_success_rate_total", "success_rate_total")
     lat = _col("test_mean_inference_latency_ms", "mean_inference_latency_ms")
+    exec_ms = _col("test_mean_execution_time_ms", "mean_execution_time_ms")
     to = _col("test_trade_off", "trade_off")
 
-    metrics = [k1, k2, k3, k4, lat]
+    metrics = [k_total, k1, k2, k3, k4, lat, exec_ms]
     for m in metrics:
         df[m] = pd.to_numeric(df[m], errors="coerce")
 
     df["trade_off_computed"] = np.where(
         df[lat] > 1e-9,
-        df[k4] / df[lat],
+        df[k_total] / df[lat],
         np.where(
             pd.to_numeric(df[to], errors="coerce").notna(),
             pd.to_numeric(df[to], errors="coerce"),

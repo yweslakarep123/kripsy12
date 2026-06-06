@@ -1,14 +1,9 @@
 """
-Inferensi Franka Kitchen dengan metrik k1–k4, latensi (global + per-episod), trade_off,
-dan penyimpanan MP4 inferensi (bukan video rollout training).
+Inferensi Franka Kitchen dengan metrik test k1–k4 (per-task), success total,
+latensi (global + per-episod), waktu pengerjaan, trade_off, dan MP4 inferensi.
 
-Dua fase evaluasi simulasi (sama-sama forward policy / "inferensi"):
-  - train_val: episode lebih sedikit, seed eval terpisah (proxy cek pasca-training).
-  - test: episode utama (metrik "testing" / laporan).
-
-Metrik simulasi pasca-training (success k1–k4, latensi) dari akhir training disimpan di
-``training_sim_metrics.json`` oleh ``train.py`` dan digabung ke ``metrics.json`` dengan
-awalan ``training_sim_*``.
+Evaluasi simulasi hanya pada fase test (default 50 episode). Training tidak
+menjalankan eval success rate / latensi.
 
 Contoh:
   python infer_kitchen.py --checkpoint runs/foo/checkpoints/latest.ckpt \\
@@ -47,12 +42,17 @@ def _prefix_metrics(prefix: str, m: dict) -> dict:
 
 def _legacy_from_test(test: dict) -> dict:
     """Kunci tanpa prefix (kompatibel parser lama) = fase test / inferensi utama."""
-    return {
+    out = {
         "success_rate_total": test.get("success_rate_total"),
+        "std_success_rate_total": test.get("std_success_rate_total"),
         "success_rate_k1": test.get("success_rate_k1"),
         "success_rate_k2": test.get("success_rate_k2"),
         "success_rate_k3": test.get("success_rate_k3"),
         "success_rate_k4": test.get("success_rate_k4"),
+        "std_success_rate_k1": test.get("std_success_rate_k1"),
+        "std_success_rate_k2": test.get("std_success_rate_k2"),
+        "std_success_rate_k3": test.get("std_success_rate_k3"),
+        "std_success_rate_k4": test.get("std_success_rate_k4"),
         "mean_inference_latency_ms": test.get("mean_inference_latency_ms"),
         "std_inference_latency_ms": test.get("std_inference_latency_ms"),
         "mean_episode_mean_inference_latency_ms": test.get(
@@ -61,6 +61,12 @@ def _legacy_from_test(test: dict) -> dict:
         "std_episode_mean_inference_latency_ms": test.get(
             "std_episode_mean_inference_latency_ms"
         ),
+        "mean_execution_time_ms": test.get("mean_execution_time_ms"),
+        "std_execution_time_ms": test.get("std_execution_time_ms"),
+        "total_execution_time_ms": test.get("total_execution_time_ms"),
+        "mean_all_tasks_execution_time_ms": test.get(
+            "mean_all_tasks_execution_time_ms"
+        ),
         "n_infer_episodes": test.get("n_infer_episodes"),
         "trade_off": test.get("trade_off"),
         "trade_off_episode_latency": test.get("trade_off_episode_latency"),
@@ -68,31 +74,13 @@ def _legacy_from_test(test: dict) -> dict:
             "per_episode_mean_inference_latency_ms"
         ),
     }
-
-
-def _merge_phases(train_val: dict, test: dict) -> dict:
-    """Flat JSON: train_val_* , test_* , plus alias tanpa prefix = test."""
-    tv = _prefix_metrics("train_val", train_val)
-    te = _prefix_metrics("test", test)
-    return {**tv, **te, **_legacy_from_test(test)}
-
-
-def _load_training_sim_prefixed(run_dir: pathlib.Path) -> dict:
-    p = run_dir / "training_sim_metrics.json"
-    if not p.is_file():
-        return {}
-    try:
-        with open(p) as f:
-            d = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {}
-    if not isinstance(d, dict) or d.get("error"):
-        return {}
-    out: dict = {}
-    for k, v in d.items():
-        if k == "sim_video_eval":
-            continue
-        out[f"training_sim_{k}"] = v
+    for ki in range(1, 5):
+        out[f"mean_task_execution_time_ms_k{ki}"] = test.get(
+            f"mean_task_execution_time_ms_k{ki}"
+        )
+        out[f"std_task_execution_time_ms_k{ki}"] = test.get(
+            f"std_task_execution_time_ms_k{ki}"
+        )
     return out
 
 
@@ -137,8 +125,8 @@ def main():
     p.add_argument(
         "--n-train-val-episodes",
         type=int,
-        default=15,
-        help="Episode eval fase train/val (sim); 0 = lewati fase ini.",
+        default=0,
+        help="Episode eval fase train/val (sim); 0 = lewati fase ini (default).",
     )
     p.add_argument("--n-infer-episodes", type=int, default=50)
     p.add_argument("--seed", type=int, default=0)
@@ -202,24 +190,10 @@ def main():
             save_inference_videos_dir=video_dir_arg,
         )
 
-        if int(args.n_train_val_episodes) > 0:
-            m_tv = runner.run_eval_metrics(
-                policy,
-                warmup_predict_steps=args.warmup_steps,
-                eval_seed=int(args.seed + args.train_val_eval_seed_offset),
-                log_video=False,
-                n_episodes=int(args.n_train_val_episodes),
-            )
-            serializable = {
-                **_load_training_sim_prefixed(run_dir),
-                **_merge_phases(m_tv, m_te),
-            }
-        else:
-            serializable = {
-                **_load_training_sim_prefixed(run_dir),
-                **_prefix_metrics("test", m_te),
-                **_legacy_from_test(m_te),
-            }
+        serializable = {
+            **_prefix_metrics("test", m_te),
+            **_legacy_from_test(m_te),
+        }
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
             json.dump(serializable, f, indent=2)
