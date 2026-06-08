@@ -174,6 +174,9 @@ def build_train_overrides(
         f"dataloader.num_workers={dataloader_num_workers}",
         f"val_dataloader.num_workers={dataloader_num_workers}",
     ]
+    lr = cfg.get("optimizer.lr")
+    if lr is not None:
+        odl.append(f"optimizer.lr={lr}")
 
     for k in CSV_HPARAM_KEYS:
         if k == "cfg_idx":
