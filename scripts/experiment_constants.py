@@ -51,14 +51,11 @@ def resolve_dataset_dir_for_train(dataset_dir: str) -> str:
 
     return str(canonical)
 
-# Referensi paper / flowpolicy.yaml default (batch 128, lr 1e-4).
-BASELINE_REF_BATCH_SIZE = 128
-BASELINE_BASE_LR = 1e-4
-
 # Selaras dengan `flowpolicy.yaml` + `kitchen_lowdim_all` (Kitchen lowdim 7-task).
 DEFAULT_BASELINE_HPARAMS = {
     "training.num_epochs": 3000,
-    "dataloader.batch_size": 1024,
+    "optimizer.lr": 1e-4,
+    "dataloader.batch_size": 128,
     "policy.Conditional_ConsistencyFM.num_segments": 2,
     "policy.Conditional_ConsistencyFM.eps": 1e-2,
     "policy.Conditional_ConsistencyFM.delta": 1e-2,
@@ -98,19 +95,9 @@ def compute_horizon(n_obs_steps: int, n_action_steps: int) -> int:
     return 4 * ((max(n_obs_steps + n_action_steps - 1, 4) + 3) // 4)
 
 
-def baseline_lr_for_batch(batch_size: int) -> float:
-    """Square-root LR scaling vs referensi batch 128 (Diffusion Policy / flowpolicy.yaml).
-
-    Batch 1024 → lr ≈ 2.83e-4. Lebih konservatif dari linear scaling (8e-4).
-    """
-    scale = (max(int(batch_size), 1) / BASELINE_REF_BATCH_SIZE) ** 0.5
-    return float(BASELINE_BASE_LR * scale)
-
-
 def baseline_config_dict() -> dict:
     """Salinan baseline dengan cfg_idx untuk CSV dan orchestrator."""
     out = dict(DEFAULT_BASELINE_HPARAMS)
-    out["optimizer.lr"] = baseline_lr_for_batch(int(out["dataloader.batch_size"]))
     out["cfg_idx"] = BASELINE_CFG_IDX
     return out
 

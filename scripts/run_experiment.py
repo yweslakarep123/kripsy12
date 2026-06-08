@@ -111,9 +111,8 @@ def load_or_create_config_bundle(
 
     if isinstance(raw, dict) and isinstance(raw.get("baseline"), dict):
         b = raw["baseline"]
-        # Konstanta baseline (batch, lr, …) menang atas configs.json lama.
         baseline = apply_vram_limits(
-            {**b, **baseline, "cfg_idx": BASELINE_CFG_IDX}, max_batch
+            {**baseline, **b, "cfg_idx": BASELINE_CFG_IDX}, max_batch
         )
 
     configs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,10 +172,11 @@ def build_train_overrides(
         f"val_dataloader.batch_size={bs}",
         f"dataloader.num_workers={dataloader_num_workers}",
         f"val_dataloader.num_workers={dataloader_num_workers}",
+        "training.cache_dataset_on_gpu=true",
+        "training.torch_compile=true",
+        "dataloader.pin_memory=false",
+        "val_dataloader.pin_memory=false",
     ]
-    lr = cfg.get("optimizer.lr")
-    if lr is not None:
-        odl.append(f"optimizer.lr={lr}")
 
     for k in CSV_HPARAM_KEYS:
         if k == "cfg_idx":
@@ -659,13 +659,13 @@ def main():
     ap.add_argument(
         "--dataloader-num-workers",
         type=int,
-        default=4,
-        help="Kurangi memori CPU/host; turunkan jika RAM habis.",
+        default=0,
+        help="DataLoader workers (0 recommended; Kitchen memakai GPU cache).",
     )
     ap.add_argument(
         "--baseline-only",
         action="store_true",
-        help="Hanya baseline (3 seed × 2 profil = 6 run default); tanpa Hyperband.",
+        help="Hanya baseline (3 seed × 1 profil = 3 run default); tanpa Hyperband.",
     )
     ap.add_argument(
         "--hyperband-only",

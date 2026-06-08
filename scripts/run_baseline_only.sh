@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Hanya 3 pelatihan baseline: 3 seed × 1 profil (standard).
-# Batch 1024 + 8 workers — target ~30–35 GB VRAM di GPU 40 GB (lowdim Kitchen).
 # Split demo MJL: 70%% train / 20%% val / 10%% test (~605 episode).
 # Eval policy: simulasi MuJoCo KitchenAllV0, multi-seed 0,42,101 via infer_kitchen_lowdim.py.
 # Dari akar repositori: ./scripts/run_baseline_only.sh
@@ -12,9 +11,8 @@ exec python3 scripts/run_experiment.py \
   --baseline-only \
   --seeds 0 42 101 \
   --profiles standard \
-  --max-batch-size 1024 \
-  --dataloader-num-workers 8 \
   --dataset-dir "$DATASET_DIR" \
   --cv-seed 12345 \
   --n-infer-episodes 50 \
+  --dataloader-num-workers 0 \
   "$@"
