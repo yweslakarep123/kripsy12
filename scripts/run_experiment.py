@@ -53,7 +53,11 @@ REPO_ROOT = SCRIPT_DIR.parent
 FLOWPOLICY_ROOT = REPO_ROOT / "FlowPolicy"
 
 sys.path.insert(0, str(SCRIPT_DIR))
-from cv_splits import build_single_train_val_split, save_splits  # noqa: E402
+from cv_splits import (  # noqa: E402
+    build_kitchen_demo_split,
+    count_kitchen_mjl_episodes,
+    save_episode_split,
+)
 from experiment_constants import (  # noqa: E402
     BASELINE_CFG_IDX,
     CSV_HPARAM_KEYS,
@@ -66,29 +70,6 @@ from experiment_constants import (  # noqa: E402
     resolve_dataset_dir_for_train,
 )
 from hyperband_search import run_hyperband  # noqa: E402
-
-_DEBUG_LOG_PATH = REPO_ROOT / ".cursor" / "debug-21f965.log"
-
-
-def _debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    # #region agent log
-    import time
-
-    payload = {
-        "sessionId": "21f965",
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    try:
-        _DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload) + "\n")
-    except OSError:
-        pass
-    # #endregion
 
 
 def _fmt_hydra_val(v: Any) -> str:
@@ -154,6 +135,7 @@ def build_train_overrides(
     val_eps: List[int],
     run_dir: pathlib.Path,
     dataset_dir: str,
+    episode_split_path: pathlib.Path,
     resume_training: bool,
     checkpoint_every: int,
     dataloader_num_workers: int,
@@ -168,6 +150,8 @@ def build_train_overrides(
     odl: List[str] = [
         "--config-name=flowpolicy_kitchen_lowdim",
         f"task.dataset.dataset_dir={dataset_dir_resolved}",
+        f"task.dataset.episode_split_path={episode_split_path.resolve()}",
+        "task.dataset.val_ratio=0.0",
         f"task.dataset.robot_noise_ratio={robot_noise}",
         f"task.robot_noise_ratio={robot_noise}",
         f"training.seed={seed}",
@@ -200,27 +184,6 @@ def build_train_overrides(
             )
             continue
         odl.append(f"{k}={_fmt_hydra_val(cfg[k])}")
-    # #region agent log
-    _debug_log(
-        "A",
-        "run_experiment.py:build_train_overrides",
-        "built hydra overrides",
-        {
-            "profile": profile,
-            "robot_noise": robot_noise,
-            "dataset_dir_input": dataset_dir,
-            "dataset_dir_resolved": dataset_dir_resolved,
-            "dataset_dir_exists": pathlib.Path(dataset_dir_resolved).is_dir(),
-            "has_env_runner_noise_override": any(
-                "task.env_runner.robot_noise_ratio" in x for x in odl
-            ),
-            "has_task_robot_noise_override": any(
-                x.startswith("task.robot_noise_ratio=") for x in odl
-            ),
-            "override_count": len(odl),
-        },
-    )
-    # #endregion
     return odl
 
 
@@ -390,6 +353,7 @@ def execute_one_job(
     infer_py: pathlib.Path,
     cwd_train: str,
     dataset_dir: str,
+    episode_split_path: pathlib.Path,
     n_infer_episodes: int,
     checkpoint_every: int,
     dataloader_num_workers: int,
@@ -506,6 +470,7 @@ def execute_one_job(
         val_eps=fold_entry["val_episodes"],
         run_dir=run_dir,
         dataset_dir=dataset_dir,
+        episode_split_path=episode_split_path,
         resume_training=resume_training,
         checkpoint_every=checkpoint_every,
         dataloader_num_workers=dataloader_num_workers,
@@ -524,18 +489,6 @@ def execute_one_job(
     )
 
     r = subprocess.run([py, str(train_py)] + overrides, cwd=cwd_train, env=env)
-    # #region agent log
-    _debug_log(
-        "C",
-        "run_experiment.py:execute_one_job",
-        "train subprocess finished",
-        {
-            "run_name": run_name,
-            "returncode": r.returncode,
-            "profile": profile,
-        },
-    )
-    # #endregion
     if r.returncode != 0:
         append_results_csv(
             results_csv,
@@ -675,7 +628,18 @@ def main():
         help="Direktori demo MJL kitchen (relatif ke FlowPolicy/, atau absolut). "
         "Juga menerima prefix FlowPolicy/ dari akar repo.",
     )
-    ap.add_argument("--n-episodes", type=int, default=19)
+    ap.add_argument(
+        "--n-test-holdout",
+        type=int,
+        default=50,
+        help="Episode demo di-holdout (tidak dipakai train/val; selaras jumlah infer sim).",
+    )
+    ap.add_argument(
+        "--train-frac",
+        type=float,
+        default=0.8,
+        help="Fraksi train dari sisa episode setelah holdout (sisanya val). Default 0.8.",
+    )
     ap.add_argument(
         "--max-batch-size",
         type=int,
@@ -792,31 +756,43 @@ def main():
 
     baseline_cfg = load_or_create_config_bundle(configs_path, args.max_batch_size)
 
-    fold_entry = build_single_train_val_split(
-        n_episodes=args.n_episodes,
-        held_out_test=1,
-        n_grid_partitions=5,
-        partition_index=0,
-        seed=args.cv_seed,
+    dataset_dir_resolved = pathlib.Path(
+        resolve_dataset_dir_for_train(args.dataset_dir)
     )
-    save_splits(
-        str(cv_path),
-        [fold_entry],
-        meta={
-            "n_episodes": args.n_episodes,
-            "split_mode": "single_train_val",
-            "n_grid_partitions": 5,
-            "partition_index": 0,
-            "cv_seed": args.cv_seed,
-            "max_batch_size": args.max_batch_size,
-            "hyperparam_search": "hyperband",
-            "hyperband_max_epochs": int(args.hyperband_max_epochs),
-            "hyperband_eta": int(args.hyperband_eta),
-            "hyperband_s_min": int(args.hyperband_s_min),
-            "hyperband_s_max": (
-                None if args.hyperband_s_max is None else int(args.hyperband_s_max)
-            ),
-        },
+    n_mjl_episodes = count_kitchen_mjl_episodes(dataset_dir_resolved)
+    fold_entry = build_kitchen_demo_split(
+        n_episodes=n_mjl_episodes,
+        n_test_holdout=int(args.n_test_holdout),
+        train_frac=float(args.train_frac),
+        seed=int(args.cv_seed),
+    )
+    episode_split_path = out_root / "episode_split.json"
+    split_meta = {
+        "dataset_dir": str(dataset_dir_resolved),
+        "n_mjl_episodes": n_mjl_episodes,
+        "n_test_holdout": int(args.n_test_holdout),
+        "train_frac": float(args.train_frac),
+        "cv_seed": int(args.cv_seed),
+        "split_mode": "kitchen_demo_holdout",
+        "max_batch_size": args.max_batch_size,
+        "hyperparam_search": "hyperband",
+        "hyperband_max_epochs": int(args.hyperband_max_epochs),
+        "hyperband_eta": int(args.hyperband_eta),
+        "hyperband_s_min": int(args.hyperband_s_min),
+        "hyperband_s_max": (
+            None if args.hyperband_s_max is None else int(args.hyperband_s_max)
+        ),
+    }
+    save_episode_split(str(episode_split_path), fold_entry, meta=split_meta)
+    with open(cv_path, "w") as f:
+        json.dump({"meta": split_meta, "folds": [fold_entry]}, f, indent=2)
+
+    print(
+        f"\n>>> Episode split ({n_mjl_episodes} demo MJL, seed={args.cv_seed}):\n"
+        f"    train={fold_entry['n_train']}  val={fold_entry['n_val']}  "
+        f"test_holdout={fold_entry['n_test']}  "
+        f"(train_frac={args.train_frac} pada {n_mjl_episodes - args.n_test_holdout} demo)\n"
+        f"    episode_split.json → {episode_split_path}\n"
     )
 
     py = sys.executable
@@ -888,6 +864,7 @@ def main():
                         infer_py=infer_py,
                         cwd_train=cwd_train,
                         dataset_dir=args.dataset_dir,
+                        episode_split_path=episode_split_path,
                         n_infer_episodes=args.n_infer_episodes,
                         checkpoint_every=args.checkpoint_every,
                         dataloader_num_workers=args.dataloader_num_workers,
@@ -913,6 +890,7 @@ def main():
             train_eps=fold_entry["train_episodes"],
             val_eps=fold_entry["val_episodes"],
             dataset_dir=args.dataset_dir,
+            episode_split_path=episode_split_path,
             checkpoint_every=args.checkpoint_every,
             dataloader_num_workers=args.dataloader_num_workers,
             py=py,
