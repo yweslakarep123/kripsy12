@@ -92,7 +92,7 @@ Override lewat orkestrator:
 
 ## Cloud GPU — mulai di sini
 
-Bagian ini untuk **Vast.ai, RunPod, Lambda, atau VM GPU** — jalankan eksperimen nyata di sini, bukan di laptop.
+Bagian ini untuk **Vast.ai, RunPod, Lambda, atau VM GPU** — jalankan eksperimen nyata di sini.
 
 ### 1. Clone & install (sekali per instance)
 
@@ -184,8 +184,8 @@ Hanya Hyperband (tanpa baseline):
 |----------|------------|
 | `WANDB_API_KEY` | Logging W&B online (opsional). |
 | `WANDB_MODE=offline` | Tanpa upload W&B. |
-| `MUJOCO_GL=egl` | Headless rendering eval (orkestrator sudah set; bisa export manual). |
-| `DATASET_DIR` | Override path dataset di shell script (default: `FlowPolicy/data/kitchen/kitchen_demos_multitask`). |
+| `MUJOCO_GL=egl` | Headless rendering eval (orkestrator sudah set). |
+| `DATASET_DIR` | Override path dataset di shell script. |
 
 Contoh:
 
@@ -211,14 +211,14 @@ Keluaran penting:
 
 | File | Isi |
 |------|-----|
-| `outputs/.../results.csv` | Satu baris per run baseline (`cfg_idx=-1`) atau rerun Hyperband (`cfg_idx=-3`). Kolom metrik: `test_p1`…`test_p7`, `test_all_7_success`, `test_p4_paper`. |
+| `outputs/.../results.csv` | Metrik per run: `test_p1`…`test_p7`, `test_all_7_success`, `test_p4_paper`. |
 | `outputs/.../runs/baseline_seed*_*/metrics.json` | Metrik eval lengkap per run. |
 | `outputs/.../runs/baseline_seed*_*/checkpoints/latest.ckpt` | Checkpoint untuk eval ulang. |
 | `outputs/.../summary.csv`, `plots/` | Agregat statistik + grafik. |
 
 ### 8. Eval manual satu checkpoint (opsional)
 
-Dari **`FlowPolicy/`**, setelah training selesai:
+Dari **`FlowPolicy/`**:
 
 ```bash
 cd FlowPolicy
@@ -364,14 +364,14 @@ Skrip **`scripts/run_experiment.py`** menjalankan tiga fase **berurutan**:
 
 Profil preprocessing: **`standard`** (noise observasi) dan **`minimal`**.
 
-Eval setelah training: **`infer_kitchen_lowdim.py`** — 7 task KitchenAllV0, metrik **p1–p7**, `test_all_7_success`, `test_p4_paper` (subset 4-task paper), agregasi **3 eval-seed** (`0,42,101`).
+Eval setelah training: **`infer_kitchen_lowdim.py`** — 7 task KitchenAllV0, metrik **p1–p7**, `test_all_7_success`, `test_p4_paper`, agregasi **3 eval-seed** (`0,42,101`).
 
 ### Hyperband (Li et al., 2018) singkat
 
 - `R` (`--hyperband-max-epochs`): resource = epoch (default **3000**).
 - `eta` (`--hyperband-eta`): default **3**.
 - Pemenang: **val_loss terkecil** di semua evaluasi intermediate.
-- Inference rollout **hanya** pada baseline + rerun pemenang (bukan selama Hyperband intermediate).
+- Inference rollout **hanya** pada baseline + rerun pemenang.
 
 ### Anggaran waktu Hyperband (R=3000, eta=3)
 
@@ -415,8 +415,6 @@ Di `--output-dir`:
 - `runs/hb_best_seed<seed>_<profile>/` — rerun pemenang Hyperband.
 - `runs/hb_cfg<idx>/` — run Hyperband intermediate (folder ter-cull dihapus otomatis).
 
-Nama run baseline: `baseline_seed0_standard`, `baseline_seed42_minimal`, dll.
-
 ### Resume setelah mesin mati
 
 - Run dilewati jika **`metrics.json`** ada, atau baris **`status=ok`** di `results.csv`.
@@ -432,7 +430,6 @@ Nama run baseline: `baseline_seed0_standard`, `baseline_seed42_minimal`, dll.
 
 - Template **Ubuntu 22.04 + CUDA 12.x + PyTorch**, atau image minimal lalu install manual.
 - **VRAM ≥ 16 GB** disarankan untuk batch 64; **24 GB+** untuk batch 128 default.
-- Pastikan **driver NVIDIA** aktif (`nvidia-smi` di shell instance).
 
 ### On-start script (contoh baseline only)
 
@@ -446,7 +443,6 @@ cd "$REPO"
 source ~/miniforge3/etc/profile.d/conda.sh  # sesuaikan path conda
 conda activate flowpolicy-kitchen
 
-# Install jika belum (first boot)
 cd FlowPolicy && pip install -q -r requirements-franka-kitchen.txt && pip install -q -e . && cd ..
 
 export MUJOCO_GL=egl
@@ -459,12 +455,10 @@ export WANDB_MODE=offline   # atau set WANDB_API_KEY
   2>&1 | tee vast_baseline.log
 ```
 
-Ganti `./scripts/run_baseline_only.sh` dengan `./scripts/run_experiment.sh` untuk pipeline penuh.
-
 ### Data di cloud
 
-1. **Termasuk di repo clone** — pastikan `FlowPolicy/data/kitchen/kitchen_demos_multitask/` ter-clone (Git LFS jika perlu).
-2. **Volume terpisah** — mount ke mis. `/data/kitchen/kitchen_demos_multitask` lalu:
+1. **Termasuk di repo clone** — pastikan `FlowPolicy/data/kitchen/kitchen_demos_multitask/` ter-clone.
+2. **Volume terpisah** — mount ke `/data/kitchen/kitchen_demos_multitask` lalu:
 
    ```bash
    export DATASET_DIR=/data/kitchen/kitchen_demos_multitask
@@ -473,25 +467,13 @@ Ganti `./scripts/run_baseline_only.sh` dengan `./scripts/run_experiment.sh` untu
 
 ### Headless MuJoCo
 
-Eval memakai `MUJOCO_GL=egl`. Orkestrator meng-set ini otomatis saat memanggil `infer_kitchen_lowdim.py`. Jika eval gagal dengan error GL/EGL, coba:
-
-```bash
-export MUJOCO_GL=egl
-# atau di beberapa image: export MUJOCO_GL=osmesa  (lebih lambat, tanpa GPU render)
-```
-
-Training **tidak** membutuhkan display (null runner).
+Eval memakai `MUJOCO_GL=egl`. Training **tidak** membutuhkan display (null runner).
 
 ### Unduh hasil
 
-Setelah selesai, salin dari instance:
-
 ```bash
-# Dari laptop lokal
 scp -r vast_instance:/workspace/kripsy12/outputs/baseline_only ./outputs/
 ```
-
-Atau arsipkan di instance: `tar czf baseline_only.tar.gz outputs/baseline_only`.
 
 ---
 
@@ -501,31 +483,22 @@ Atau arsipkan di instance: `tar czf baseline_only.tar.gz outputs/baseline_only`.
 |------------|--------------|
 | `test_p1` … `test_p7` | Fraksi episode yang menyelesaikan ≥ N dari 7 task |
 | `test_all_7_success` | Fraksi episode yang menyelesaikan **semua 7 task** |
-| `test_p4_paper` | Subset 4-task (microwave, kettle, light switch, slide cabinet) — banding paper |
+| `test_p4_paper` | Subset 4-task (microwave, kettle, light switch, slide cabinet) |
 | `test_mean_inference_latency_ms` | Latensi inferensi policy |
 
 Detail protokol: `KITCHEN_EVAL_PORTING.md` di akar repo.
 
 ---
 
-## Pipeline lama (point cloud / zarr)
-
-File **`infer_kitchen.py`**, config **`franka_kitchen_complete4`**, dan dataset **zarr** masih ada di repo tetapi **bukan default**. Eksperimen baru memakai **`flowpolicy_kitchen_lowdim`** + **`infer_kitchen_lowdim.py`**.
-
----
-
 ## Push ke GitHub
 
 ```bash
-git init   # jika belum
-git remote add origin https://github.com/<user>/<repo>.git
 git add README.md scripts FlowPolicy
-git commit -m "Add README and FlowPolicy training code"
-git branch -M main
-git push -u origin main
+git commit -m "Kitchen lowdim pipeline"
+git push
 ```
 
-Hindari commit folder besar (`data/outputs/`, zarr, checkpoint). Gunakan `.gitignore`.
+Hindari commit folder besar (`data/outputs/`, checkpoint). Gunakan `.gitignore`.
 
 ## Lisensi / atribusi
 

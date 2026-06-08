@@ -108,6 +108,22 @@ training:
   tqdm_interval_sec: 1.0
   max_grad_norm: 1.0
   ema_decay: 0.95
+  early_stop:
+    enabled: false
+    eval_episodes: 10
+    patience: 8
+    min_delta: 0.5
+    min_epochs: 400
+    monitor_keys:
+      - success_rate_total
+      - success_rate_k1
+      - success_rate_k2
+      - success_rate_k3
+      - success_rate_k4
+      - success_rate_task_microwave
+      - success_rate_task_kettle
+      - success_rate_task_light_switch
+      - success_rate_task_slide_cabinet
 
 logging:
   group: ${exp_name}

@@ -692,13 +692,13 @@ def main():
         "--n-train-val-episodes",
         type=int,
         default=0,
-        help="Episode simulasi untuk metrik fase train/val (infer_kitchen); 0 = lewati (default).",
+        help="Episode simulasi untuk metrik fase train/val; 0 = lewati (default).",
     )
     ap.add_argument(
         "--train-val-eval-seed-offset",
         type=int,
         default=31,
-        help="Offset seed eval train/val vs test (infer_kitchen).",
+        help="Offset seed eval train/val vs test (infer_kitchen_lowdim).",
     )
     ap.add_argument(
         "--skip-inference-videos",
