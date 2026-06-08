@@ -364,6 +364,29 @@ class TrainFlowPolicyWorkspace:
         es_stale_checks = 0
         stop_training = False
 
+        use_amp = bool(OmegaConf.select(cfg, "training.use_amp", default=False))
+        amp_dtype_name = str(
+            OmegaConf.select(cfg, "training.amp_dtype", default="bf16")
+        ).lower()
+        if amp_dtype_name == "bf16":
+            amp_dtype = torch.bfloat16
+        elif amp_dtype_name == "fp16":
+            amp_dtype = torch.float16
+        else:
+            amp_dtype = torch.float32
+            use_amp = False
+        use_amp = use_amp and device.type == "cuda"
+        use_grad_scaler = use_amp and amp_dtype == torch.float16
+        grad_scaler = torch.cuda.amp.GradScaler(enabled=use_grad_scaler)
+        if use_amp:
+            cprint(
+                f"[AMP] enabled dtype={amp_dtype_name} "
+                f"(grad_scaler={'on' if use_grad_scaler else 'off'})",
+                "cyan",
+            )
+        else:
+            cprint("[AMP] disabled — full FP32 training", "yellow")
+
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         for local_epoch_idx in range(cfg.training.num_epochs):
@@ -383,15 +406,27 @@ class TrainFlowPolicyWorkspace:
                 
                     # compute loss
                     t1_1 = time.time()
-                    raw_loss, loss_dict = self.model.compute_loss(batch)
+                    with torch.autocast(
+                        device_type=device.type,
+                        dtype=amp_dtype,
+                        enabled=use_amp,
+                    ):
+                        raw_loss, loss_dict = self.model.compute_loss(batch)
                     loss = raw_loss / cfg.training.gradient_accumulate_every
-                    loss.backward()
+                    if use_grad_scaler:
+                        grad_scaler.scale(loss).backward()
+                    else:
+                        loss.backward()
                     
                     t1_2 = time.time()
 
                     # step optimizer
                     if self.global_step % cfg.training.gradient_accumulate_every == 0:
-                        self.optimizer.step()
+                        if use_grad_scaler:
+                            grad_scaler.step(self.optimizer)
+                            grad_scaler.update()
+                        else:
+                            self.optimizer.step()
                         self.optimizer.zero_grad()
                         lr_scheduler.step()
                     t1_3 = time.time()
@@ -498,7 +533,12 @@ class TrainFlowPolicyWorkspace:
                             leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                         for batch_idx, batch in enumerate(tepoch):
                             batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                            loss, loss_dict = self.model.compute_loss(batch)
+                            with torch.autocast(
+                                device_type=device.type,
+                                dtype=amp_dtype,
+                                enabled=use_amp,
+                            ):
+                                loss, loss_dict = self.model.compute_loss(batch)
                             val_losses.append(loss)
                             if (cfg.training.max_val_steps is not None) \
                                 and batch_idx >= (cfg.training.max_val_steps-1):
@@ -522,7 +562,12 @@ class TrainFlowPolicyWorkspace:
                     )
                     gt_action = batch['action']
                     
-                    result = policy.predict_action(obs_dict)
+                    with torch.autocast(
+                        device_type=device.type,
+                        dtype=amp_dtype,
+                        enabled=use_amp,
+                    ):
+                        result = policy.predict_action(obs_dict)
                     pred_action = result['action_pred']
                     mse = torch.nn.functional.mse_loss(pred_action, gt_action)
                     step_log['train_action_mse_error'] = mse.item()
