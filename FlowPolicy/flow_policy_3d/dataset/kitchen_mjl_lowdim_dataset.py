@@ -1,6 +1,5 @@
 from typing import Dict, List, Optional, Set
 import json
-import time
 import torch
 import numpy as np
 import copy
@@ -12,27 +11,6 @@ from flow_policy_3d.common.sampler import SequenceSampler, get_val_mask
 from flow_policy_3d.model.common.normalizer import LinearNormalizer
 from flow_policy_3d.dataset.base_dataset import BaseDataset
 from flow_policy_3d.env.kitchen.kitchen_util import parse_mjl_logs
-
-_DEBUG_LOG_PATH = pathlib.Path(__file__).resolve().parents[3] / ".cursor" / "debug-21f965.log"
-
-
-def _debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    # #region agent log
-    payload = {
-        "sessionId": "21f965",
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    try:
-        _DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload) + "\n")
-    except OSError:
-        pass
-    # #endregion
 
 
 def _load_episode_split(path: str) -> Dict[str, Set[int]]:
@@ -227,26 +205,6 @@ class KitchenMjlLowdimDataset(BaseDataset):
             )
             train_mask = ~val_mask
             failed_in_split = {}
-
-        # #region agent log
-        _debug_log(
-            "A",
-            "kitchen_mjl_lowdim_dataset.py:__init__",
-            "dataset load + split summary",
-            {
-                "n_glob": n_glob,
-                "n_loaded": n_loaded,
-                "n_parse_errors": n_parse_errors,
-                "failed_global_indices": failed_global_indices[:20],
-                "train_count": int(train_mask.sum()),
-                "val_count": int(val_mask.sum()),
-                "episode_split_path": episode_split_path,
-                "failed_in_split": {
-                    k: v[:10] for k, v in (failed_in_split or {}).items()
-                },
-            },
-        )
-        # #endregion
 
         self.train_mask = train_mask
         self.val_mask = val_mask

@@ -629,16 +629,10 @@ def main():
         "Juga menerima prefix FlowPolicy/ dari akar repo.",
     )
     ap.add_argument(
-        "--n-test-holdout",
-        type=int,
-        default=50,
-        help="Episode demo di-holdout (tidak dipakai train/val; selaras jumlah infer sim).",
-    )
-    ap.add_argument(
         "--train-frac",
         type=float,
         default=0.8,
-        help="Fraksi train dari sisa episode setelah holdout (sisanya val). Default 0.8.",
+        help="Fraksi train dari semua demo MJL (sisanya val). Default 0.8.",
     )
     ap.add_argument(
         "--max-batch-size",
@@ -762,7 +756,6 @@ def main():
     n_mjl_episodes = count_kitchen_mjl_episodes(dataset_dir_resolved)
     fold_entry = build_kitchen_demo_split(
         n_episodes=n_mjl_episodes,
-        n_test_holdout=int(args.n_test_holdout),
         train_frac=float(args.train_frac),
         seed=int(args.cv_seed),
     )
@@ -770,10 +763,10 @@ def main():
     split_meta = {
         "dataset_dir": str(dataset_dir_resolved),
         "n_mjl_episodes": n_mjl_episodes,
-        "n_test_holdout": int(args.n_test_holdout),
         "train_frac": float(args.train_frac),
         "cv_seed": int(args.cv_seed),
-        "split_mode": "kitchen_demo_holdout",
+        "split_mode": "kitchen_demo_train_val",
+        "note": "Semua demo dipakai train/val; eval sim via infer_kitchen_lowdim.py",
         "max_batch_size": args.max_batch_size,
         "hyperparam_search": "hyperband",
         "hyperband_max_epochs": int(args.hyperband_max_epochs),
@@ -790,8 +783,7 @@ def main():
     print(
         f"\n>>> Episode split ({n_mjl_episodes} demo MJL, seed={args.cv_seed}):\n"
         f"    train={fold_entry['n_train']}  val={fold_entry['n_val']}  "
-        f"test_holdout={fold_entry['n_test']}  "
-        f"(train_frac={args.train_frac} pada {n_mjl_episodes - args.n_test_holdout} demo)\n"
+        f"(train_frac={args.train_frac}, semua demo dipakai; infer=simulasi MuJoCo)\n"
         f"    episode_split.json → {episode_split_path}\n"
     )
 

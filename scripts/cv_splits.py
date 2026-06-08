@@ -1,8 +1,9 @@
 """
-Partisi train/val/test pada level episode demo Kitchen (.mjl).
+Partisi train/val pada level episode demo Kitchen (.mjl).
 
-Split aktif untuk eksperimen: holdout ``n_test_holdout`` episode (default 50,
-selaras jumlah episode inferensi simulasi), sisanya ``train_frac`` / val.
+Semua demo dipakai untuk training (train + val). Evaluasi policy dilakukan
+via rollout simulasi MuJoCo (``infer_kitchen_lowdim.py``), bukan holdout demo.
+
 Indeks episode = urutan sorted ``*/*.mjl`` di folder dataset (deterministik).
 """
 
@@ -30,57 +31,42 @@ def count_kitchen_mjl_episodes(dataset_dir: Path) -> int:
 def build_kitchen_demo_split(
     n_episodes: int,
     *,
-    n_test_holdout: int = 50,
     train_frac: float = 0.8,
     seed: int = 12345,
 ) -> Dict[str, Any]:
     """
-    Satu partisi episode-level untuk Kitchen MJL.
+    Satu partisi train/val untuk **semua** episode demo Kitchen MJL.
 
     1. Acak ``n_episodes`` indeks dengan ``seed``.
-    2. ``n_test_holdout`` pertama → test (tidak dipakai training/val).
-    3. Sisanya → ``train_frac`` train, remainder val.
+    2. ``train_frac`` → train, sisanya val (minimal 1 masing-masing).
 
-    Contoh 605 episode, holdout 50, train_frac 0.8:
-      test=50, train=444, val=111.
+    Contoh 605 episode, train_frac 0.8 → train=484, val=121.
+    Inferensi simulasi (50 episode × eval-seed) terpisah; tidak holdout demo.
     """
-    if n_episodes < 3:
-        raise ValueError(f"n_episodes minimal 3, dapat {n_episodes}")
-    if n_test_holdout < 0 or n_test_holdout >= n_episodes:
-        raise ValueError(
-            f"n_test_holdout ({n_test_holdout}) harus dalam [0, {n_episodes - 1})"
-        )
+    if n_episodes < 2:
+        raise ValueError(f"n_episodes minimal 2, dapat {n_episodes}")
     if not (0.0 < train_frac < 1.0):
         raise ValueError(f"train_frac harus di (0, 1), dapat {train_frac}")
 
-    n_train_val = n_episodes - n_test_holdout
-    if n_train_val < 2:
-        raise ValueError(
-            f"Perlu minimal 2 episode train+val, dapat {n_train_val}"
-        )
-
     rng = np.random.RandomState(int(seed))
     perm = rng.permutation(n_episodes).tolist()
-    test_episodes = sorted(perm[:n_test_holdout])
-    rest = perm[n_test_holdout:]
-    n_train = int(round(n_train_val * train_frac))
-    n_train = max(1, min(n_train, n_train_val - 1))
-    n_val = n_train_val - n_train
-    train_episodes = sorted(rest[:n_train])
-    val_episodes = sorted(rest[n_train:])
+    n_train = int(round(n_episodes * train_frac))
+    n_train = max(1, min(n_train, n_episodes - 1))
+    n_val = n_episodes - n_train
+    train_episodes = sorted(perm[:n_train])
+    val_episodes = sorted(perm[n_train:])
 
     return {
         "fold": 0,
         "train_episodes": train_episodes,
         "val_episodes": val_episodes,
-        "test_episodes": test_episodes,
+        "test_episodes": [],
         "n_episodes": int(n_episodes),
-        "n_test_holdout": int(n_test_holdout),
         "train_frac": float(train_frac),
         "split_seed": int(seed),
         "n_train": len(train_episodes),
         "n_val": len(val_episodes),
-        "n_test": len(test_episodes),
+        "n_test": 0,
     }
 
 
