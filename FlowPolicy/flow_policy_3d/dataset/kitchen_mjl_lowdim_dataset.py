@@ -35,7 +35,9 @@ class KitchenMjlLowdimDataset(BaseDataset):
 
         data_directory = pathlib.Path(dataset_dir)
         self.replay_buffer = ReplayBuffer.create_empty_numpy()
-        for i, mjl_path in enumerate(tqdm(list(data_directory.glob('*/*.mjl')))):
+        mjl_paths = list(data_directory.glob('*/*.mjl'))
+        n_parse_errors = 0
+        for i, mjl_path in enumerate(tqdm(mjl_paths)):
             try:
                 data = parse_mjl_logs(str(mjl_path.absolute()), skipamount=40)
                 qpos = data['qpos'].astype(np.float32)
@@ -54,7 +56,44 @@ class KitchenMjlLowdimDataset(BaseDataset):
                 }
                 self.replay_buffer.add_episode(episode)
             except Exception as e:
+                n_parse_errors += 1
                 print(i, e)
+
+        # #region agent log
+        import json
+        import time
+        _dbg_payload = {
+            "sessionId": "21f965",
+            "hypothesisId": "B",
+            "location": "kitchen_mjl_lowdim_dataset.py:__init__",
+            "message": "dataset load summary",
+            "data": {
+                "dataset_dir": str(dataset_dir),
+                "resolved_dir": str(data_directory.resolve()),
+                "dir_exists": data_directory.is_dir(),
+                "mjl_glob_count": len(mjl_paths),
+                "n_episodes_loaded": int(self.replay_buffer.n_episodes),
+                "n_parse_errors": n_parse_errors,
+            },
+            "timestamp": int(time.time() * 1000),
+        }
+        try:
+            _dbg_log = pathlib.Path(__file__).resolve().parents[3] / ".cursor" / "debug-21f965.log"
+            _dbg_log.parent.mkdir(parents=True, exist_ok=True)
+            with open(_dbg_log, "a", encoding="utf-8") as _f:
+                _f.write(json.dumps(_dbg_payload) + "\n")
+        except OSError:
+            pass
+        # #endregion
+
+        if self.replay_buffer.n_episodes == 0:
+            raise FileNotFoundError(
+                f"Tidak ada episode MJL yang dimuat dari {data_directory.resolve()}. "
+                f"Glob '*/*.mjl' menemukan {len(mjl_paths)} file, "
+                f"{n_parse_errors} gagal parse. "
+                "Pastikan dataset ada dan path benar (relatif ke FlowPolicy/: "
+                "'data/kitchen/kitchen_demos_multitask')."
+            )
 
         val_mask = get_val_mask(
             n_episodes=self.replay_buffer.n_episodes, 

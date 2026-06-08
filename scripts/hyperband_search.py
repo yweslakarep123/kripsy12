@@ -64,6 +64,7 @@ from experiment_constants import (  # noqa: E402
     HYPERBAND_CFG_IDX_BASE,
     SEARCH_SPACE,
     compute_horizon,
+    resolve_dataset_dir_for_train,
     sample_configs_hyperband,
 )
 
@@ -185,10 +186,11 @@ def _build_train_overrides_hb(
     hz = compute_horizon(n_obs, n_act)
     bs = int(cfg["dataloader.batch_size"])
     robot_noise = 0.1 if profile == "standard" else 0.0
+    dataset_dir_resolved = resolve_dataset_dir_for_train(dataset_dir)
 
     odl: List[str] = [
         "--config-name=flowpolicy_kitchen_lowdim",
-        f"task.dataset.dataset_dir={dataset_dir}",
+        f"task.dataset.dataset_dir={dataset_dir_resolved}",
         f"task.dataset.robot_noise_ratio={robot_noise}",
         f"task.robot_noise_ratio={robot_noise}",
         f"training.seed={seed}",
