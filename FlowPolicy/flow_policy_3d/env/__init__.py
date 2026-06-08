@@ -1,7 +1,9 @@
-__all__ = ["AdroitEnv", "MetaWorldEnv", "FrankaKitchenPointCloudEnv"]
+__all__ = ["AdroitEnv", "MetaWorldEnv"]
+
+import importlib
 
 
-def __getattr__(name):
+def __getattr__(name: str):
     if name == "AdroitEnv":
         from .adroit import AdroitEnv
 
@@ -10,8 +12,4 @@ def __getattr__(name):
         from .metaworld import MetaWorldEnv
 
         return MetaWorldEnv
-    if name == "FrankaKitchenPointCloudEnv":
-        from .franka_kitchen import FrankaKitchenPointCloudEnv
-
-        return FrankaKitchenPointCloudEnv
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

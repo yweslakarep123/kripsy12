@@ -7,7 +7,7 @@ class BaseRunner:
         self.output_dir = output_dir
 
     def close(self):
-        """Subkelas yang memegang sim / renderer harus override (mis. KitchenRunner)."""
+        """Subkelas yang memegang sim / renderer harus override (mis. KitchenLowdimEvalRunner)."""
         pass
 
     def run(self, policy: BasePolicy) -> Dict:

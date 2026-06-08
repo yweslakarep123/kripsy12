@@ -514,7 +514,12 @@ class TrainFlowPolicyWorkspace:
                 with torch.no_grad():
                     # sample trajectory from training set, and evaluate difference
                     batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
-                    obs_dict = batch['obs']
+                    raw_obs = batch['obs']
+                    obs_dict = (
+                        {'obs': raw_obs}
+                        if isinstance(raw_obs, torch.Tensor)
+                        else raw_obs
+                    )
                     gt_action = batch['action']
                     
                     result = policy.predict_action(obs_dict)
