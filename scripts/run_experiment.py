@@ -63,6 +63,7 @@ from experiment_constants import (  # noqa: E402
     compute_horizon,
     empty_metrics_row,
     metrics_row_from_infer_json,
+    resolve_dataset_dir_for_train,
 )
 from hyperband_search import run_hyperband  # noqa: E402
 
@@ -162,10 +163,11 @@ def build_train_overrides(
     hz = compute_horizon(n_obs, n_act)
     bs = int(cfg["dataloader.batch_size"])
     robot_noise = 0.1 if profile == "standard" else 0.0
+    dataset_dir_resolved = resolve_dataset_dir_for_train(dataset_dir)
 
     odl: List[str] = [
         "--config-name=flowpolicy_kitchen_lowdim",
-        f"task.dataset.dataset_dir={dataset_dir}",
+        f"task.dataset.dataset_dir={dataset_dir_resolved}",
         f"task.dataset.robot_noise_ratio={robot_noise}",
         f"task.robot_noise_ratio={robot_noise}",
         f"training.seed={seed}",
@@ -206,6 +208,9 @@ def build_train_overrides(
         {
             "profile": profile,
             "robot_noise": robot_noise,
+            "dataset_dir_input": dataset_dir,
+            "dataset_dir_resolved": dataset_dir_resolved,
+            "dataset_dir_exists": pathlib.Path(dataset_dir_resolved).is_dir(),
             "has_env_runner_noise_override": any(
                 "task.env_runner.robot_noise_ratio" in x for x in odl
             ),
@@ -666,8 +671,9 @@ def main():
     ap.add_argument(
         "--dataset-dir",
         type=str,
-        default="FlowPolicy/data/kitchen/kitchen_demos_multitask",
-        help="Relatif ke folder FlowPolicy/ (berisi train.py): direktori demo MJL kitchen.",
+        default="data/kitchen/kitchen_demos_multitask",
+        help="Direktori demo MJL kitchen (relatif ke FlowPolicy/, atau absolut). "
+        "Juga menerima prefix FlowPolicy/ dari akar repo.",
     )
     ap.add_argument("--n-episodes", type=int, default=19)
     ap.add_argument(

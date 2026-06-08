@@ -11,9 +11,45 @@ untuk pemenang Hyperband final = R.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
+
+# Root FlowPolicy/ (parent of scripts/).
+_FLOWPOLICY_ROOT = Path(__file__).resolve().parent.parent / "FlowPolicy"
+
+
+def resolve_dataset_dir_for_train(dataset_dir: str) -> str:
+    """Normalisasi path demo MJL untuk ``train.py`` (cwd = ``FlowPolicy/``).
+
+    Menerima path relatif ke repo (``FlowPolicy/data/...``), relatif ke
+    ``FlowPolicy/`` (``data/...``), atau absolut.
+
+    Jika path kanonik tidak ada, coba lokasi legacy
+    ``FlowPolicy/FlowPolicy/data/...`` (sering terjadi saat dataset di-clone
+    dengan path repo-relative sementara ``train.py`` sudah ``chdir`` ke
+    ``FlowPolicy/``).
+    """
+    p = Path(dataset_dir)
+    if p.is_absolute():
+        return str(p.resolve())
+
+    ds = dataset_dir.replace("\\", "/").strip("/")
+    if ds.startswith("FlowPolicy/"):
+        rel = ds[len("FlowPolicy/") :]
+    else:
+        rel = ds
+
+    canonical = (_FLOWPOLICY_ROOT / rel).resolve()
+    if canonical.is_dir():
+        return str(canonical)
+
+    legacy = (_FLOWPOLICY_ROOT / "FlowPolicy" / rel).resolve()
+    if legacy.is_dir():
+        return str(legacy)
+
+    return str(canonical)
 
 # Selaras dengan `flowpolicy.yaml` + `kitchen_lowdim_all` (Kitchen lowdim 7-task).
 DEFAULT_BASELINE_HPARAMS = {
