@@ -111,8 +111,9 @@ def load_or_create_config_bundle(
 
     if isinstance(raw, dict) and isinstance(raw.get("baseline"), dict):
         b = raw["baseline"]
+        # Konstanta baseline (batch, lr, …) menang atas configs.json lama.
         baseline = apply_vram_limits(
-            {**baseline, **b, "cfg_idx": BASELINE_CFG_IDX}, max_batch
+            {**b, **baseline, "cfg_idx": BASELINE_CFG_IDX}, max_batch
         )
 
     configs_path.parent.mkdir(parents=True, exist_ok=True)
