@@ -1,5 +1,6 @@
-from typing import Dict, Optional, Set
+from typing import Dict, List, Optional, Set
 import json
+import time
 import torch
 import numpy as np
 import copy
@@ -11,6 +12,27 @@ from flow_policy_3d.common.sampler import SequenceSampler, get_val_mask
 from flow_policy_3d.model.common.normalizer import LinearNormalizer
 from flow_policy_3d.dataset.base_dataset import BaseDataset
 from flow_policy_3d.env.kitchen.kitchen_util import parse_mjl_logs
+
+_DEBUG_LOG_PATH = pathlib.Path(__file__).resolve().parents[3] / ".cursor" / "debug-21f965.log"
+
+
+def _debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # #region agent log
+    payload = {
+        "sessionId": "21f965",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        _DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except OSError:
+        pass
+    # #endregion
 
 
 def _load_episode_split(path: str) -> Dict[str, Set[int]]:
@@ -103,8 +125,13 @@ class KitchenMjlLowdimDataset(BaseDataset):
             )
 
         self.replay_buffer = ReplayBuffer.create_empty_numpy()
+        loaded_global_indices: List[int] = []
+        failed_global_indices: List[int] = []
         n_parse_errors = 0
-        for i, mjl_path in enumerate(tqdm(mjl_paths, desc="Load kitchen MJL")):
+
+        for global_idx, mjl_path in enumerate(
+            tqdm(mjl_paths, desc="Load kitchen MJL")
+        ):
             try:
                 data = parse_mjl_logs(str(mjl_path.absolute()), skipamount=40)
                 qpos = data["qpos"].astype(np.float32)
@@ -126,30 +153,41 @@ class KitchenMjlLowdimDataset(BaseDataset):
                     "action": data["ctrl"].astype(np.float32),
                 }
                 self.replay_buffer.add_episode(episode)
+                loaded_global_indices.append(global_idx)
             except Exception as e:
                 n_parse_errors += 1
-                print(i, e)
+                failed_global_indices.append(global_idx)
+                print(f"[warn] skip mjl index={global_idx} path={mjl_path}: {e}")
 
+        n_glob = len(mjl_paths)
         n_loaded = self.replay_buffer.n_episodes
         if n_loaded == 0:
             raise FileNotFoundError(
                 f"Tidak ada episode MJL yang dimuat dari {data_directory.resolve()}. "
-                f"Glob menemukan {len(mjl_paths)} file, {n_parse_errors} gagal parse."
+                f"Glob menemukan {n_glob} file, {n_parse_errors} gagal parse."
             )
-        if n_loaded != len(mjl_paths):
-            raise RuntimeError(
-                f"Hanya {n_loaded}/{len(mjl_paths)} episode berhasil dimuat."
+        if n_parse_errors > 0:
+            print(
+                f"[warn] {n_parse_errors}/{n_glob} file MJL gagal parse; "
+                f"melanjutkan dengan {n_loaded} episode."
             )
 
+        self.loaded_global_indices = loaded_global_indices
         self.episode_split_path = episode_split_path
+
         if episode_split_path:
             split = _load_episode_split(episode_split_path)
-            n_eps = n_loaded
+            n_catalog = int(split.get("n_episodes", n_glob))
+            if n_catalog != n_glob:
+                print(
+                    f"[warn] episode_split n_episodes={n_catalog} != "
+                    f"glob count {n_glob}; memakai indeks glob saat ini."
+                )
             for name, indices in split.items():
-                bad = [i for i in indices if i < 0 or i >= n_eps]
+                bad = [i for i in indices if i < 0 or i >= n_glob]
                 if bad:
                     raise ValueError(
-                        f"Indeks {name} di luar [0, {n_eps}): {bad[:5]}..."
+                        f"Indeks {name} di luar [0, {n_glob}): {bad[:5]}..."
                     )
             overlap = (split["train"] & split["val"]) | (
                 split["train"] & split["test"]
@@ -157,15 +195,29 @@ class KitchenMjlLowdimDataset(BaseDataset):
             if overlap:
                 raise ValueError(f"Overlap train/val/test: {sorted(overlap)[:10]}")
 
+            loaded_set = set(loaded_global_indices)
+            failed_in_split = {
+                name: sorted(indices - loaded_set)
+                for name, indices in split.items()
+                if indices - loaded_set
+            }
+
             train_mask = np.array(
-                [i in split["train"] for i in range(n_eps)], dtype=bool
+                [gi in split["train"] for gi in loaded_global_indices], dtype=bool
             )
             val_mask = np.array(
-                [i in split["val"] for i in range(n_eps)], dtype=bool
+                [gi in split["val"] for gi in loaded_global_indices], dtype=bool
             )
             if not train_mask.any() or not val_mask.any():
                 raise ValueError(
-                    f"Split kosong: train={train_mask.sum()}, val={val_mask.sum()}"
+                    f"Split kosong setelah skip parse error: "
+                    f"train={train_mask.sum()}, val={val_mask.sum()}, "
+                    f"failed_in_split={failed_in_split}"
+                )
+            if failed_in_split:
+                print(
+                    "[warn] Indeks split mengarah ke file MJL yang gagal parse "
+                    f"(dilewati): {failed_in_split}"
                 )
         else:
             val_mask = get_val_mask(
@@ -174,6 +226,27 @@ class KitchenMjlLowdimDataset(BaseDataset):
                 seed=seed,
             )
             train_mask = ~val_mask
+            failed_in_split = {}
+
+        # #region agent log
+        _debug_log(
+            "A",
+            "kitchen_mjl_lowdim_dataset.py:__init__",
+            "dataset load + split summary",
+            {
+                "n_glob": n_glob,
+                "n_loaded": n_loaded,
+                "n_parse_errors": n_parse_errors,
+                "failed_global_indices": failed_global_indices[:20],
+                "train_count": int(train_mask.sum()),
+                "val_count": int(val_mask.sum()),
+                "episode_split_path": episode_split_path,
+                "failed_in_split": {
+                    k: v[:10] for k, v in (failed_in_split or {}).items()
+                },
+            },
+        )
+        # #endregion
 
         self.train_mask = train_mask
         self.val_mask = val_mask
