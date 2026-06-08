@@ -37,6 +37,21 @@ policy:
 
 n_action_steps: 8
 
+# Kitchen MJL is tiny (~100 MB); keep data on GPU and compile the MLP.
 training:
-  use_amp: true
-  amp_dtype: bf16
+  cache_dataset_on_gpu: true
+  torch_compile: true
+
+dataloader:
+  batch_size: 128
+  num_workers: 0
+  shuffle: true
+  pin_memory: false
+  persistent_workers: false
+
+val_dataloader:
+  batch_size: 128
+  num_workers: 0
+  shuffle: false
+  pin_memory: false
+  persistent_workers: false
