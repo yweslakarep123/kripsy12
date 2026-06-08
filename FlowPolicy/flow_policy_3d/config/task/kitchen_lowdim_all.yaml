@@ -27,7 +27,8 @@ dataset:
   abs_action: ${task.abs_action}
   robot_noise_ratio: ${task.robot_noise_ratio}
   seed: 42
-  val_ratio: 0.02
+  val_ratio: 0.0
+  episode_split_path: null
 
 # Eval runner settings (used by infer_kitchen_lowdim / eval_kitchen)
 eval_runner:
