@@ -66,6 +66,29 @@ from experiment_constants import (  # noqa: E402
 )
 from hyperband_search import run_hyperband  # noqa: E402
 
+_DEBUG_LOG_PATH = REPO_ROOT / ".cursor" / "debug-21f965.log"
+
+
+def _debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # #region agent log
+    import time
+
+    payload = {
+        "sessionId": "21f965",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        _DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except OSError:
+        pass
+    # #endregion
+
 
 def _fmt_hydra_val(v: Any) -> str:
     if isinstance(v, bool):
@@ -145,7 +168,6 @@ def build_train_overrides(
         f"task.dataset.dataset_dir={dataset_dir}",
         f"task.dataset.robot_noise_ratio={robot_noise}",
         f"task.robot_noise_ratio={robot_noise}",
-        f"task.env_runner.robot_noise_ratio={robot_noise}",
         f"training.seed={seed}",
         f"task.dataset.seed={seed}",
         "training.compute_val_loss=true",
@@ -176,6 +198,24 @@ def build_train_overrides(
             )
             continue
         odl.append(f"{k}={_fmt_hydra_val(cfg[k])}")
+    # #region agent log
+    _debug_log(
+        "A",
+        "run_experiment.py:build_train_overrides",
+        "built hydra overrides",
+        {
+            "profile": profile,
+            "robot_noise": robot_noise,
+            "has_env_runner_noise_override": any(
+                "task.env_runner.robot_noise_ratio" in x for x in odl
+            ),
+            "has_task_robot_noise_override": any(
+                x.startswith("task.robot_noise_ratio=") for x in odl
+            ),
+            "override_count": len(odl),
+        },
+    )
+    # #endregion
     return odl
 
 
@@ -479,6 +519,18 @@ def execute_one_job(
     )
 
     r = subprocess.run([py, str(train_py)] + overrides, cwd=cwd_train, env=env)
+    # #region agent log
+    _debug_log(
+        "C",
+        "run_experiment.py:execute_one_job",
+        "train subprocess finished",
+        {
+            "run_name": run_name,
+            "returncode": r.returncode,
+            "profile": profile,
+        },
+    )
+    # #endregion
     if r.returncode != 0:
         append_results_csv(
             results_csv,
