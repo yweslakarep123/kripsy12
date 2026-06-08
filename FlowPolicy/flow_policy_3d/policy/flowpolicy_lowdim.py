@@ -212,7 +212,7 @@ class FlowPolicyLowdim(BasePolicy):
                     generator=generator,
                 )
                 z = z.detach().clone() + pred_sigma * dt + inc
-        z[cond_mask] = cond_data[cond_mask]
+        z[cond_mask] = cond_data[cond_mask].to(dtype=z.dtype)
         naction_pred = z[..., :Da]
         action_pred = self.normalizer["action"].unnormalize(naction_pred)
         start = To - 1
@@ -256,6 +256,17 @@ class FlowPolicyLowdim(BasePolicy):
             trajectory = cond_data.detach()
 
         condition_mask = self.mask_generator(trajectory.shape)
+        # #region agent log
+        try:
+            import json as _json, time as _time
+            from pathlib import Path as _Path
+            _log_path = _Path(__file__).resolve().parents[3] / ".cursor" / "debug-c84b5d.log"
+            _log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(_log_path, "a") as _lf:
+                _lf.write(_json.dumps({"sessionId":"c84b5d","hypothesisId":"A,B,E","location":"flowpolicy_lowdim.py:cond_data","message":"dtype_before_model","data":{"cond_data":str(cond_data.dtype),"target":str(target.dtype),"nactions":str(nactions.dtype),"global_cond":str(global_cond.dtype) if global_cond is not None else None},"timestamp":int(_time.time()*1000)})+"\n")
+        except Exception:
+            pass
+        # #endregion
         a0 = torch.randn(trajectory.shape, device=trajectory.device)
 
         t = torch.rand(target.shape[0], device=target.device) * (1 - eps) + eps
@@ -266,6 +277,16 @@ class FlowPolicyLowdim(BasePolicy):
         xr = r_expand * target + (1.0 - r_expand) * a0
         xt[condition_mask] = cond_data[condition_mask]
         xr[condition_mask] = cond_data[condition_mask]
+        # #region agent log
+        try:
+            import json as _json, time as _time
+            from pathlib import Path as _Path
+            _log_path = _Path(__file__).resolve().parents[3] / ".cursor" / "debug-c84b5d.log"
+            with open(_log_path, "a") as _lf:
+                _lf.write(_json.dumps({"sessionId":"c84b5d","hypothesisId":"C","location":"flowpolicy_lowdim.py:xt_mask","message":"dtype_after_xt_mask","data":{"xt":str(xt.dtype),"xr":str(xr.dtype),"cond_data":str(cond_data.dtype)},"timestamp":int(_time.time()*1000)})+"\n")
+        except Exception:
+            pass
+        # #endregion
 
         segments = torch.linspace(0, 1, num_segments + 1, device=target.device)
         seg_indices = torch.searchsorted(segments, t, side="left").clamp(min=1)
@@ -290,8 +311,19 @@ class FlowPolicyLowdim(BasePolicy):
 
         vt = self.model(xt, t * 99, local_cond=local_cond, global_cond=global_cond)
         vr = self.model(xr, r * 99, local_cond=local_cond, global_cond=global_cond)
-        vt[condition_mask] = cond_data[condition_mask]
-        vr[condition_mask] = cond_data[condition_mask]
+        # #region agent log
+        try:
+            import json as _json, time as _time
+            from pathlib import Path as _Path
+            _log_path = _Path(__file__).resolve().parents[3] / ".cursor" / "debug-c84b5d.log"
+            with open(_log_path, "a") as _lf:
+                _lf.write(_json.dumps({"sessionId":"c84b5d","runId":"post-fix","hypothesisId":"A","location":"flowpolicy_lowdim.py:vt_pre_assign","message":"dtype_before_vt_mask","data":{"vt":str(vt.dtype),"vr":str(vr.dtype),"cond_data":str(cond_data.dtype),"dtype_match":str(vt.dtype)==str(cond_data.dtype)},"timestamp":int(_time.time()*1000)})+"\n")
+        except Exception:
+            pass
+        # #endregion
+        masked_cond = cond_data[condition_mask].to(dtype=vt.dtype)
+        vt[condition_mask] = masked_cond
+        vr[condition_mask] = masked_cond.to(dtype=vr.dtype)
         vr = torch.nan_to_num(vr)
 
         ft = f_euler(t_expand, segment_ends_expand, xt, vt)
