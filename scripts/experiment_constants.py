@@ -55,7 +55,7 @@ def resolve_dataset_dir_for_train(dataset_dir: str) -> str:
 DEFAULT_BASELINE_HPARAMS = {
     "training.num_epochs": 3000,
     "optimizer.lr": 1e-4,
-    "dataloader.batch_size": 128,
+    "dataloader.batch_size": 512,
     "policy.Conditional_ConsistencyFM.num_segments": 2,
     "policy.Conditional_ConsistencyFM.eps": 1e-2,
     "policy.Conditional_ConsistencyFM.delta": 1e-2,
