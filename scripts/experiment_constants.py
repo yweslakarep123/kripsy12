@@ -15,7 +15,7 @@ from typing import Any, Dict, List
 
 import numpy as np
 
-# Selaras dengan `flowpolicy.yaml` + `franka_kitchen_complete4` (FlowPolicy asli).
+# Selaras dengan `flowpolicy.yaml` + `kitchen_lowdim_all` (Kitchen lowdim 7-task).
 DEFAULT_BASELINE_HPARAMS = {
     "training.num_epochs": 3000,
     "optimizer.lr": 1e-4,
@@ -23,7 +23,7 @@ DEFAULT_BASELINE_HPARAMS = {
     "policy.Conditional_ConsistencyFM.num_segments": 2,
     "policy.Conditional_ConsistencyFM.eps": 1e-2,
     "policy.Conditional_ConsistencyFM.delta": 1e-2,
-    "n_action_steps": 4,
+    "n_action_steps": 8,
     "n_obs_steps": 2,
     "policy.diffusion_step_embed_dim": 128,
     "_state_mlp_hidden": 64,
@@ -43,8 +43,8 @@ SEARCH_SPACE = {
     "policy.Conditional_ConsistencyFM.num_segments": [1, 2, 3, 4],
     "policy.Conditional_ConsistencyFM.eps": [1e-4, 1e-3, 1e-2, 0.5],
     "policy.Conditional_ConsistencyFM.delta": [1e-4, 1e-3, 1e-2, 1.0],
-    "n_action_steps": [2, 4, 6, 8],
-    "n_obs_steps": [4, 6, 8, 16],
+    "n_action_steps": [4, 6, 8],
+    "n_obs_steps": [2, 4],
     "policy.diffusion_step_embed_dim": [128, 256, 512, 1024],
     "_state_mlp_hidden": [128, 256, 512, 1024],
 }
@@ -148,6 +148,26 @@ RESULTS_CSV_METRIC_COLUMNS = [
     "test_trade_off",
     "test_trade_off_episode_latency",
     "test_n_infer_episodes",
+    "test_all_7_success",
+    "test_std_all_7_success",
+    "test_p1",
+    "test_p2",
+    "test_p3",
+    "test_p4",
+    "test_p5",
+    "test_p6",
+    "test_p7",
+    "test_std_p1",
+    "test_std_p2",
+    "test_std_p3",
+    "test_std_p4",
+    "test_std_p5",
+    "test_std_p6",
+    "test_std_p7",
+    "test_p4_paper",
+    "test_std_p4_paper",
+    "test_mean_episode_duration_ms",
+    "test_std_episode_duration_ms",
     "success_rate_total",
     "std_success_rate_total",
     "success_rate_k1",
@@ -339,6 +359,22 @@ def metrics_row_from_infer_json(met: Dict[str, Any]) -> Dict[str, Any]:
     row["test_n_infer_episodes"] = pick(
         "test_n_infer_episodes", "n_infer_episodes"
     )
+
+    row["test_all_7_success"] = pick(
+        "test_all_7_success", "success_rate_total", "test_success_rate_total"
+    )
+    row["test_std_all_7_success"] = pick(
+        "test_std_all_7_success", "std_success_rate_total", "test_std_success_rate_total"
+    )
+    for k in range(1, 8):
+        row[f"test_p{k}"] = pick(f"test_p{k}")
+        row[f"test_std_p{k}"] = pick(f"test_std_p{k}")
+    row["test_p4_paper"] = pick("test_p4_paper", "success_rate_k4", "test_success_rate_k4")
+    row["test_std_p4_paper"] = pick(
+        "test_std_p4_paper", "std_success_rate_k4", "test_std_success_rate_k4"
+    )
+    row["test_mean_episode_duration_ms"] = pick("test_mean_episode_duration_ms")
+    row["test_std_episode_duration_ms"] = pick("test_std_episode_duration_ms")
 
     row["success_rate_total"] = pick(
         "success_rate_total", "test_success_rate_total"

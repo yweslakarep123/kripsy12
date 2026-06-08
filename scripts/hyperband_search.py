@@ -174,7 +174,7 @@ def _build_train_overrides_hb(
     train_eps: List[int],
     val_eps: List[int],
     run_dir: pathlib.Path,
-    zarr_rel: str,
+    dataset_dir: str,
     resume_training: bool,
     delta_num_epochs: int,
     checkpoint_every: int,
@@ -184,16 +184,14 @@ def _build_train_overrides_hb(
     n_act = int(cfg["n_action_steps"])
     hz = compute_horizon(n_obs, n_act)
     bs = int(cfg["dataloader.batch_size"])
-
-    def il(xs: List[int]) -> str:
-        return "[" + ",".join(str(int(x)) for x in xs) + "]"
+    robot_noise = 0.1 if profile == "standard" else 0.0
 
     odl: List[str] = [
-        "task=franka_kitchen_complete4",
-        f"task.dataset.zarr_path={zarr_rel}",
-        f"task.dataset.train_episode_indices={il(train_eps)}",
-        f"task.dataset.val_episode_indices={il(val_eps)}",
-        f"task.dataset.preprocessing_profile={profile}",
+        "--config-name=flowpolicy_kitchen_lowdim",
+        f"task.dataset.dataset_dir={dataset_dir}",
+        f"task.dataset.robot_noise_ratio={robot_noise}",
+        f"task.robot_noise_ratio={robot_noise}",
+        f"task.env_runner.robot_noise_ratio={robot_noise}",
         f"training.seed={seed}",
         f"task.dataset.seed={seed}",
         "training.compute_val_loss=true",
@@ -219,6 +217,9 @@ def _build_train_overrides_hb(
             continue
         if k == "_state_mlp_hidden":
             odl.append(f"policy.encoder_output_dim={_fmt_hydra_val(cfg[k])}")
+            odl.append(
+                f"policy.obs_mlp_hidden=[{_fmt_hydra_val(cfg[k])},{_fmt_hydra_val(cfg[k])}]"
+            )
             continue
         odl.append(f"{k}={_fmt_hydra_val(cfg[k])}")
     return odl
@@ -348,7 +349,7 @@ def _evaluate_config_at_rung(
     profile: str,
     train_eps: List[int],
     val_eps: List[int],
-    zarr_rel: str,
+    dataset_dir: str,
     checkpoint_every: int,
     dataloader_num_workers: int,
 ) -> Tuple[Optional[float], int, int]:
@@ -385,7 +386,7 @@ def _evaluate_config_at_rung(
         train_eps=train_eps,
         val_eps=val_eps,
         run_dir=run_dir,
-        zarr_rel=zarr_rel,
+        dataset_dir=dataset_dir,
         resume_training=resume,
         delta_num_epochs=delta,
         checkpoint_every=checkpoint_every,
@@ -446,7 +447,7 @@ def _successive_halving_for_bracket(
     profile: str,
     train_eps: List[int],
     val_eps: List[int],
-    zarr_rel: str,
+    dataset_dir: str,
     checkpoint_every: int,
     dataloader_num_workers: int,
     eta: int,
@@ -529,7 +530,7 @@ def _successive_halving_for_bracket(
                 profile=profile,
                 train_eps=train_eps,
                 val_eps=val_eps,
-                zarr_rel=zarr_rel,
+                dataset_dir=dataset_dir,
                 checkpoint_every=checkpoint_every,
                 dataloader_num_workers=dataloader_num_workers,
             )
@@ -655,7 +656,7 @@ def run_hyperband(
     search_profile: str,
     train_eps: List[int],
     val_eps: List[int],
-    zarr_rel: str,
+    dataset_dir: str,
     checkpoint_every: int,
     dataloader_num_workers: int,
     py: str,
@@ -744,7 +745,7 @@ def run_hyperband(
             profile=search_profile,
             train_eps=train_eps,
             val_eps=val_eps,
-            zarr_rel=zarr_rel,
+            dataset_dir=dataset_dir,
             checkpoint_every=checkpoint_every,
             dataloader_num_workers=dataloader_num_workers,
             eta=eta,

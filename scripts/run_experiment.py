@@ -15,16 +15,13 @@ pada semua ``seeds × profiles`` user (default 3 × 2 = 6 run) dengan training
 Flag mutually exclusive:
 
 - ``--baseline-only`` — hanya baseline; Hyperband dilewati.
-- ``--hyperband-only`` — hanya Hyperband (skip baseline; butuh ``--zarr-path``
+- ``--hyperband-only`` — hanya Hyperband (skip baseline; butuh ``--dataset-dir``
   tetap valid).
 
 Tanpa flag: jalankan baseline lalu Hyperband berurutan.
 
-Metrik inferensi hanya pada fase test (default 50 episode): success total &
-k1–k4 per-task (mean+std); latensi global + rata-rata per-episod (mean+std);
-waktu pengerjaan per-task dan total (ms); ``trade_off`` dan
-``trade_off_episode_latency``. Training hanya mencatat train/val loss.
-Video: MP4 inferensi per-episod di ``inference_videos/``.
+Metrik inferensi (Kitchen lowdim, 7 task): eval multi-seed ``0,42,101`` via
+``infer_kitchen_lowdim.py`` — p1–p7, all-7 success, latensi, dan MP4 per episode.
 
 Resume:
 
@@ -132,7 +129,7 @@ def build_train_overrides(
     train_eps: List[int],
     val_eps: List[int],
     run_dir: pathlib.Path,
-    zarr_rel: str,
+    dataset_dir: str,
     resume_training: bool,
     checkpoint_every: int,
     dataloader_num_workers: int,
@@ -141,16 +138,14 @@ def build_train_overrides(
     n_act = int(cfg["n_action_steps"])
     hz = compute_horizon(n_obs, n_act)
     bs = int(cfg["dataloader.batch_size"])
-
-    def il(xs: List[int]) -> str:
-        return "[" + ",".join(str(int(x)) for x in xs) + "]"
+    robot_noise = 0.1 if profile == "standard" else 0.0
 
     odl: List[str] = [
-        "task=franka_kitchen_complete4",
-        f"task.dataset.zarr_path={zarr_rel}",
-        f"task.dataset.train_episode_indices={il(train_eps)}",
-        f"task.dataset.val_episode_indices={il(val_eps)}",
-        f"task.dataset.preprocessing_profile={profile}",
+        "--config-name=flowpolicy_kitchen_lowdim",
+        f"task.dataset.dataset_dir={dataset_dir}",
+        f"task.dataset.robot_noise_ratio={robot_noise}",
+        f"task.robot_noise_ratio={robot_noise}",
+        f"task.env_runner.robot_noise_ratio={robot_noise}",
         f"training.seed={seed}",
         f"task.dataset.seed={seed}",
         "training.compute_val_loss=true",
@@ -176,6 +171,9 @@ def build_train_overrides(
             continue
         if k == "_state_mlp_hidden":
             odl.append(f"policy.encoder_output_dim={_fmt_hydra_val(cfg[k])}")
+            odl.append(
+                f"policy.obs_mlp_hidden=[{_fmt_hydra_val(cfg[k])},{_fmt_hydra_val(cfg[k])}]"
+            )
             continue
         odl.append(f"{k}={_fmt_hydra_val(cfg[k])}")
     return odl
@@ -306,10 +304,11 @@ def run_infer_subprocess(
     n_infer_episodes: int,
     seed: int,
     *,
-    n_train_val_episodes: int,
-    train_val_eval_seed_offset: int,
+    eval_seeds: str = "0,42,101",
     skip_inference_videos: bool = False,
 ) -> int:
+    env = dict(env)
+    env.setdefault("MUJOCO_GL", "egl")
     cmd = [
         py,
         str(infer_py),
@@ -317,22 +316,15 @@ def run_infer_subprocess(
         str(ckpt_path),
         "--metrics-json",
         str(metrics_path),
-        "--n-train-val-episodes",
-        str(int(n_train_val_episodes)),
-        "--train-val-eval-seed-offset",
-        str(int(train_val_eval_seed_offset)),
         "--n-infer-episodes",
         str(n_infer_episodes),
         "--seed",
         str(seed),
-        "--warmup-steps",
-        "20",
+        "--eval-seeds",
+        eval_seeds,
     ]
     if skip_inference_videos:
         cmd.append("--skip-inference-videos")
-    else:
-        vdir = pathlib.Path(metrics_path).parent / "inference_videos"
-        cmd.extend(["--inference-videos-dir", str(vdir.resolve())])
     return subprocess.run(cmd, cwd=cwd_train, env=env).returncode
 
 
@@ -352,12 +344,11 @@ def execute_one_job(
     train_py: pathlib.Path,
     infer_py: pathlib.Path,
     cwd_train: str,
-    zarr_path: str,
+    dataset_dir: str,
     n_infer_episodes: int,
     checkpoint_every: int,
     dataloader_num_workers: int,
-    n_train_val_episodes: int,
-    train_val_eval_seed_offset: int,
+    eval_seeds: str = "0,42,101",
     skip_inference_videos: bool = False,
     resume_from_results_csv: bool = True,
 ) -> None:
@@ -407,8 +398,7 @@ def execute_one_job(
             metrics_path,
             n_infer_episodes,
             seed,
-            n_train_val_episodes=n_train_val_episodes,
-            train_val_eval_seed_offset=train_val_eval_seed_offset,
+            eval_seeds=eval_seeds,
             skip_inference_videos=skip_inference_videos,
         )
         tr_l, va_l = load_training_final(run_dir)
@@ -470,7 +460,7 @@ def execute_one_job(
         train_eps=fold_entry["train_episodes"],
         val_eps=fold_entry["val_episodes"],
         run_dir=run_dir,
-        zarr_rel=zarr_path,
+        dataset_dir=dataset_dir,
         resume_training=resume_training,
         checkpoint_every=checkpoint_every,
         dataloader_num_workers=dataloader_num_workers,
@@ -549,8 +539,7 @@ def execute_one_job(
         metrics_path,
         n_infer_episodes,
         seed,
-        n_train_val_episodes=n_train_val_episodes,
-        train_val_eval_seed_offset=train_val_eval_seed_offset,
+        eval_seeds=eval_seeds,
         skip_inference_videos=skip_inference_videos,
     )
     tr_l, va_l = load_training_final(run_dir)
@@ -623,11 +612,10 @@ def main():
         "ini dan melewati job (cfg_idx, seed, profile, fold) yang sudah status=ok.",
     )
     ap.add_argument(
-        "--zarr-path",
+        "--dataset-dir",
         type=str,
-        default="FlowPolicy/data/kitchen_complete_from_minari.zarr",
-        help="Relatif ke akar paket (folder berisi train.py dan flow_policy_3d/), "
-        "mis. FlowPolicy/data/... → .../FlowPolicy/FlowPolicy/data/...",
+        default="FlowPolicy/data/kitchen/kitchen_demos_multitask",
+        help="Relatif ke folder FlowPolicy/ (berisi train.py): direktori demo MJL kitchen.",
     )
     ap.add_argument("--n-episodes", type=int, default=19)
     ap.add_argument(
@@ -775,7 +763,7 @@ def main():
 
     py = sys.executable
     train_py = FLOWPOLICY_ROOT / "train.py"
-    infer_py = FLOWPOLICY_ROOT / "infer_kitchen.py"
+    infer_py = FLOWPOLICY_ROOT / "infer_kitchen_lowdim.py"
     cwd_train = str(FLOWPOLICY_ROOT.resolve())
     hp_cols = list(CSV_HPARAM_KEYS)
     split_fold_idx = int(fold_entry["fold"])
@@ -841,12 +829,11 @@ def main():
                         train_py=train_py,
                         infer_py=infer_py,
                         cwd_train=cwd_train,
-                        zarr_path=args.zarr_path,
+                        dataset_dir=args.dataset_dir,
                         n_infer_episodes=args.n_infer_episodes,
                         checkpoint_every=args.checkpoint_every,
                         dataloader_num_workers=args.dataloader_num_workers,
-                        n_train_val_episodes=args.n_train_val_episodes,
-                        train_val_eval_seed_offset=args.train_val_eval_seed_offset,
+                        eval_seeds="0,42,101",
                         skip_inference_videos=args.skip_inference_videos,
                         resume_from_results_csv=True,
                     )
@@ -867,7 +854,7 @@ def main():
             search_profile=str(args.hyperband_search_profile),
             train_eps=fold_entry["train_episodes"],
             val_eps=fold_entry["val_episodes"],
-            zarr_rel=args.zarr_path,
+            dataset_dir=args.dataset_dir,
             checkpoint_every=args.checkpoint_every,
             dataloader_num_workers=args.dataloader_num_workers,
             py=py,

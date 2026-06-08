@@ -19,10 +19,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+DATASET_DIR="${DATASET_DIR:-FlowPolicy/data/kitchen/kitchen_demos_multitask}"
 exec python3 scripts/run_experiment.py \
   --hyperband-only \
   --seeds 0 42 101 \
   --profiles standard minimal \
+  --dataset-dir "$DATASET_DIR" \
   --hyperband-max-epochs 3000 \
   --hyperband-eta 3 \
   --hyperband-s-min 0 \
