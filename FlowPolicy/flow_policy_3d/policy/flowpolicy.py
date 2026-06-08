@@ -354,7 +354,7 @@ class FlowPolicy(BasePolicy):
                     generator=generator,
                 )
                 z = z.detach().clone() + pred_sigma * dt + inc
-        z[cond_mask] = cond_data[cond_mask] # a1
+        z[cond_mask] = cond_data[cond_mask].to(dtype=z.dtype)  # a1
         # unnormalize prediction
         naction_pred = z[...,:Da]
         action_pred = self.normalizer['action'].unnormalize(naction_pred)
@@ -451,8 +451,9 @@ class FlowPolicy(BasePolicy):
         vt = self.model(xt, t*99, cond=local_cond, global_cond=global_cond)
         vr = self.model(xr, r*99, local_cond=local_cond, global_cond=global_cond)
         # mask
-        vt[condition_mask] = cond_data[condition_mask]
-        vr[condition_mask] = cond_data[condition_mask]
+        masked_cond = cond_data[condition_mask].to(dtype=vt.dtype)
+        vt[condition_mask] = masked_cond
+        vr[condition_mask] = masked_cond.to(dtype=vr.dtype)
 
         vr = torch.nan_to_num(vr)
       
