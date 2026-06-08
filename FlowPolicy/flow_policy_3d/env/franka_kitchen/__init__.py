@@ -1,1 +1,0 @@
-from .franka_kitchen_env import FrankaKitchenPointCloudEnv

@@ -191,7 +191,6 @@ def _build_train_overrides_hb(
         f"task.dataset.dataset_dir={dataset_dir}",
         f"task.dataset.robot_noise_ratio={robot_noise}",
         f"task.robot_noise_ratio={robot_noise}",
-        f"task.env_runner.robot_noise_ratio={robot_noise}",
         f"training.seed={seed}",
         f"task.dataset.seed={seed}",
         "training.compute_val_loss=true",
