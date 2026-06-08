@@ -631,8 +631,20 @@ def main():
     ap.add_argument(
         "--train-frac",
         type=float,
-        default=0.8,
-        help="Fraksi train dari semua demo MJL (sisanya val). Default 0.8.",
+        default=0.7,
+        help="Fraksi train demo MJL. Default 0.7 (dengan val 0.2, test 0.1).",
+    )
+    ap.add_argument(
+        "--val-frac",
+        type=float,
+        default=0.2,
+        help="Fraksi val demo MJL. Default 0.2.",
+    )
+    ap.add_argument(
+        "--test-frac",
+        type=float,
+        default=0.1,
+        help="Fraksi test demo MJL (holdout; tidak dipakai infer MuJoCo). Default 0.1.",
     )
     ap.add_argument(
         "--max-batch-size",
@@ -757,6 +769,8 @@ def main():
     fold_entry = build_kitchen_demo_split(
         n_episodes=n_mjl_episodes,
         train_frac=float(args.train_frac),
+        val_frac=float(args.val_frac),
+        test_frac=float(args.test_frac),
         seed=int(args.cv_seed),
     )
     episode_split_path = out_root / "episode_split.json"
@@ -764,9 +778,11 @@ def main():
         "dataset_dir": str(dataset_dir_resolved),
         "n_mjl_episodes": n_mjl_episodes,
         "train_frac": float(args.train_frac),
+        "val_frac": float(args.val_frac),
+        "test_frac": float(args.test_frac),
         "cv_seed": int(args.cv_seed),
-        "split_mode": "kitchen_demo_train_val",
-        "note": "Semua demo dipakai train/val; eval sim via infer_kitchen_lowdim.py",
+        "split_mode": "kitchen_demo_train_val_test",
+        "note": "Split demo MJL train/val/test; eval policy via simulasi MuJoCo (infer_kitchen_lowdim.py)",
         "max_batch_size": args.max_batch_size,
         "hyperparam_search": "hyperband",
         "hyperband_max_epochs": int(args.hyperband_max_epochs),
@@ -783,7 +799,9 @@ def main():
     print(
         f"\n>>> Episode split ({n_mjl_episodes} demo MJL, seed={args.cv_seed}):\n"
         f"    train={fold_entry['n_train']}  val={fold_entry['n_val']}  "
-        f"(train_frac={args.train_frac}, semua demo dipakai; infer=simulasi MuJoCo)\n"
+        f"test={fold_entry['n_test']}  "
+        f"({args.train_frac:.0%}/{args.val_frac:.0%}/{args.test_frac:.0%})\n"
+        f"    infer policy = simulasi MuJoCo (infer_kitchen_lowdim.py), bukan replay demo test\n"
         f"    episode_split.json → {episode_split_path}\n"
     )
 
