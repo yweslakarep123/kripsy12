@@ -225,44 +225,12 @@ class TrainFlowPolicyWorkspace:
         dataset = hydra.utils.instantiate(cfg.task.dataset)
 
         assert isinstance(dataset, BaseDataset), print(f"dataset must be BaseDataset, got {type(dataset)}")
-
-        device = torch.device(cfg.training.device)
-        cache_on_gpu = bool(
-            OmegaConf.select(cfg, "training.cache_dataset_on_gpu", default=False)
-            and device.type == "cuda"
-        )
-
-        val_dataset = dataset.get_validation_dataset()
-        if cache_on_gpu:
-            from flow_policy_3d.dataset.gpu_cached_loader import GpuCachedBatchedLoader
-
-            train_dataloader = GpuCachedBatchedLoader(
-                dataset,
-                batch_size=int(cfg.dataloader.batch_size),
-                shuffle=bool(cfg.dataloader.get("shuffle", True)),
-                device=device,
-                seed=int(cfg.training.seed),
-            )
-            val_dataloader = GpuCachedBatchedLoader(
-                val_dataset,
-                batch_size=int(cfg.val_dataloader.batch_size),
-                shuffle=False,
-                device=device,
-                seed=int(cfg.training.seed) + 1,
-                show_progress=len(val_dataset) > 0,
-            )
-            cprint(
-                f"[train] GPU cache: train {train_dataloader.cache_size_mb:.1f} MB "
-                f"({train_dataloader.n_samples} samples), "
-                f"val {val_dataloader.cache_size_mb:.1f} MB "
-                f"({val_dataloader.n_samples} samples)",
-                "green",
-            )
-        else:
-            train_dataloader = DataLoader(dataset, **cfg.dataloader)
-            val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
-
+        train_dataloader = DataLoader(dataset, **cfg.dataloader)
         normalizer = dataset.get_normalizer()
+
+        # configure validation dataset
+        val_dataset = dataset.get_validation_dataset()
+        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
 
         # #region agent log
         _nparam = sum(p.numel() for p in self.model.parameters())
@@ -343,23 +311,11 @@ class TrainFlowPolicyWorkspace:
         # #endregion
 
         # device transfer
+        device = torch.device(cfg.training.device)
         self.model.to(device)
         if self.ema_model is not None:
             self.ema_model.to(device)
         optimizer_to(self.optimizer, device)
-
-        use_torch_compile = bool(
-            OmegaConf.select(cfg, "training.torch_compile", default=False)
-        )
-        if use_torch_compile:
-            if hasattr(torch, "compile"):
-                self.model = torch.compile(self.model, mode="reduce-overhead")
-                cprint("[train] torch.compile(model, mode='reduce-overhead')", "green")
-            else:
-                cprint(
-                    "[train] torch.compile skipped (butuh PyTorch >= 2.0)",
-                    "yellow",
-                )
 
         # Sim / eval runner: buat setelah bobot di GPU agar tidak berebut VRAM dengan model.to
         env_runner: BaseRunner
@@ -413,8 +369,6 @@ class TrainFlowPolicyWorkspace:
         for local_epoch_idx in range(cfg.training.num_epochs):
             if stop_training:
                 break
-            if cache_on_gpu and hasattr(train_dataloader, "set_epoch_seed"):
-                train_dataloader.set_epoch_seed(int(self.epoch))
             step_log = dict()
             # ========= train for this epoch ==========
             train_losses = list()

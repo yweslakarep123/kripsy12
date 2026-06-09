@@ -41,11 +41,12 @@ def resolve_dataset_dir_for_train(dataset_dir: str) -> str:
     else:
         rel = ds
 
-    canonical = (_FLOWPOLICY_ROOT / rel).resolve()
+    canonical = _FLOWPOLICY_ROOT / rel
     if canonical.is_dir():
+        # Keep canonical path (do not follow symlinks into FlowPolicy/FlowPolicy/...).
         return str(canonical)
 
-    legacy = (_FLOWPOLICY_ROOT / "FlowPolicy" / rel).resolve()
+    legacy = _FLOWPOLICY_ROOT / "FlowPolicy" / rel
     if legacy.is_dir():
         return str(legacy)
 

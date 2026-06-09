@@ -214,10 +214,6 @@ def _build_train_overrides_hb(
         f"val_dataloader.batch_size={bs}",
         f"dataloader.num_workers={dataloader_num_workers}",
         f"val_dataloader.num_workers={dataloader_num_workers}",
-        "training.cache_dataset_on_gpu=true",
-        "training.torch_compile=true",
-        "dataloader.pin_memory=false",
-        "val_dataloader.pin_memory=false",
         f"training.num_epochs={int(delta_num_epochs)}",
     ]
     for k in CSV_HPARAM_KEYS:
