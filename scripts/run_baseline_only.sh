@@ -14,5 +14,4 @@ exec python3 scripts/run_experiment.py \
   --dataset-dir "$DATASET_DIR" \
   --cv-seed 12345 \
   --n-infer-episodes 50 \
-  --dataloader-num-workers 0 \
   "$@"

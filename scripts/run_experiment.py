@@ -172,10 +172,6 @@ def build_train_overrides(
         f"val_dataloader.batch_size={bs}",
         f"dataloader.num_workers={dataloader_num_workers}",
         f"val_dataloader.num_workers={dataloader_num_workers}",
-        "training.cache_dataset_on_gpu=true",
-        "training.torch_compile=true",
-        "dataloader.pin_memory=false",
-        "val_dataloader.pin_memory=false",
     ]
 
     for k in CSV_HPARAM_KEYS:
@@ -659,13 +655,13 @@ def main():
     ap.add_argument(
         "--dataloader-num-workers",
         type=int,
-        default=0,
-        help="DataLoader workers (0 recommended; Kitchen memakai GPU cache).",
+        default=4,
+        help="Kurangi memori CPU/host; turunkan jika RAM habis.",
     )
     ap.add_argument(
         "--baseline-only",
         action="store_true",
-        help="Hanya baseline (3 seed × 1 profil = 3 run default); tanpa Hyperband.",
+        help="Hanya baseline (3 seed × 2 profil = 6 run default); tanpa Hyperband.",
     )
     ap.add_argument(
         "--hyperband-only",
