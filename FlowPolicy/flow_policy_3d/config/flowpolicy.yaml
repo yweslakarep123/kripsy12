@@ -61,6 +61,7 @@ policy:
 
 ema:
   _target_: flow_policy_3d.model.flow.ema_model.EMAModel
+  decay: ${training.ema_decay}
   update_after_step: 0
   inv_gamma: 1.0
   power: 0.75

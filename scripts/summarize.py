@@ -25,16 +25,14 @@ def summarize(output_dir: Path, *, results_csv: Path | None = None) -> None:
     def _col(preferred: str, fallback: str) -> str:
         return preferred if preferred in df.columns else fallback
 
-    k1, k2, k3 = _col("test_success_rate_k1", "success_rate_k1"), _col(
-        "test_success_rate_k2", "success_rate_k2"
-    ), _col("test_success_rate_k3", "success_rate_k3")
-    k4 = _col("test_success_rate_k4", "success_rate_k4")
-    k_total = _col("test_success_rate_total", "success_rate_total")
+    k7 = _col("test_p7", "test_all_7_success")
+    k4 = _col("test_p4_paper", "test_success_rate_k4")
+    k_total = _col("test_all_7_success", "test_success_rate_total", "success_rate_total")
     lat = _col("test_mean_inference_latency_ms", "mean_inference_latency_ms")
-    exec_ms = _col("test_mean_execution_time_ms", "mean_execution_time_ms")
+    exec_ms = _col("test_mean_episode_duration_ms", "test_mean_execution_time_ms", "mean_execution_time_ms")
     to = _col("test_trade_off", "trade_off")
 
-    metrics = [k_total, k1, k2, k3, k4, lat, exec_ms]
+    metrics = [k_total, k7, k4, lat, exec_ms]
     for m in metrics:
         df[m] = pd.to_numeric(df[m], errors="coerce")
 

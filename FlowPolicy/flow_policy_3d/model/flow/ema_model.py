@@ -14,7 +14,8 @@ class EMAModel:
         inv_gamma=1.0,
         power=2 / 3,
         min_value=0.0,
-        max_value=0.9999
+        max_value=0.9999,
+        decay=None,
     ):
         """
         @crowsonkb's notes on EMA Warmup:
@@ -26,6 +27,7 @@ class EMAModel:
             inv_gamma (float): Inverse multiplicative factor of EMA warmup. Default: 1.
             power (float): Exponential factor of EMA warmup. Default: 2/3.
             min_value (float): The minimum EMA decay rate. Default: 0.
+            decay (float, optional): Fixed EMA decay (e.g. 0.95). When set, warmup schedule is skipped.
         """
 
         self.averaged_model = model
@@ -37,6 +39,7 @@ class EMAModel:
         self.power = power
         self.min_value = min_value
         self.max_value = max_value
+        self.fixed_decay = None if decay is None else float(decay)
 
         self.decay = 0.0
         self.optimization_step = 0
@@ -45,6 +48,11 @@ class EMAModel:
         """
         Compute the decay factor for the exponential moving average.
         """
+        if self.fixed_decay is not None:
+            if optimization_step <= self.update_after_step:
+                return 0.0
+            return self.fixed_decay
+
         step = max(0, optimization_step - self.update_after_step - 1)
         value = 1 - (1 + step / self.inv_gamma) ** -self.power
 

@@ -38,7 +38,7 @@ def _save(fig, path_base: Path):
 def plot_tradeoff_scatter(df_ok: pd.DataFrame, out_dir: Path):
     """Satu titik per (profile, cfg_idx); error bar = std lintas seed."""
     lat_c = _pick_col(df_ok, "test_mean_inference_latency_ms", "mean_inference_latency_ms")
-    k4_c = _pick_col(df_ok, "test_success_rate_k4", "success_rate_k4")
+    k7_c = _pick_col(df_ok, "test_p7", "test_all_7_success")
     fig, ax = plt.subplots(figsize=(9, 6))
     markers = {"standard": "o", "minimal": "s"}
     profiles = df_ok["profile"].unique()
@@ -51,7 +51,7 @@ def plot_tradeoff_scatter(df_ok: pd.DataFrame, out_dir: Path):
             if len(sub) < 1:
                 continue
             per_seed_lat = sub.groupby("seed")[lat_c].mean()
-            per_seed_sr = sub.groupby("seed")[k4_c].mean()
+            per_seed_sr = sub.groupby("seed")[k7_c].mean()
             mx = float(per_seed_lat.mean())
             my = float(per_seed_sr.mean())
             ex = float(per_seed_lat.std(ddof=0)) if len(per_seed_lat) > 1 else 0.0
@@ -68,7 +68,7 @@ def plot_tradeoff_scatter(df_ok: pd.DataFrame, out_dir: Path):
                 capsize=2,
             )
     ax.set_xlabel(lat_c)
-    ax.set_ylabel(f"{k4_c} (%)")
+    ax.set_ylabel(f"{k7_c} (%)")
     ax.set_title("Trade-off scatter (titik = cfg×profile; batang = std seeds)")
     handles, labels = ax.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
@@ -119,7 +119,7 @@ def plot_cv_box(summary: pd.DataFrame, results_ok: pd.DataFrame, out_dir: Path):
     colors = []
     pos = 0
     cmap = {"standard": "#1f77b4", "minimal": "#ff7f0e"}
-    k4_c = _pick_col(results_ok, "test_success_rate_k4", "success_rate_k4")
+    k7_c = _pick_col(results_ok, "test_p7", "test_all_7_success")
     for cfg_idx in top_cfg:
         for profile in ["standard", "minimal"]:
             sub = results_ok[
@@ -128,7 +128,7 @@ def plot_cv_box(summary: pd.DataFrame, results_ok: pd.DataFrame, out_dir: Path):
             ]
             if len(sub) < 2:
                 continue
-            data.append(sub[k4_c].astype(float).values)
+            data.append(sub[k7_c].astype(float).values)
             positions.append(pos)
             colors.append(cmap.get(profile, "gray"))
             pos += 1
@@ -138,7 +138,7 @@ def plot_cv_box(summary: pd.DataFrame, results_ok: pd.DataFrame, out_dir: Path):
         for patch, c in zip(bp["boxes"], colors):
             patch.set_facecolor(c)
             patch.set_alpha(0.55)
-    ax.set_ylabel(k4_c)
+    ax.set_ylabel(k7_c)
     ax.set_title("Seed variance (top-5 cfg_idx by trade_off)")
     ax.grid(True, axis="y", alpha=0.3)
     _save(fig, out_dir / "cv_fold_variance")
@@ -148,7 +148,7 @@ def plot_hparam_sensitivity(results_ok: pd.DataFrame, out_dir: Path):
     hp_keys = list(SEARCH_SPACE.keys())
     profiles = ["standard", "minimal"]
     lat_c = _pick_col(results_ok, "test_mean_inference_latency_ms", "mean_inference_latency_ms")
-    k4_c = _pick_col(results_ok, "test_success_rate_k4", "success_rate_k4")
+    k7_c = _pick_col(results_ok, "test_p7", "test_all_7_success")
     n_hp = len(hp_keys)
     ncols = 3
     nrows = int(np.ceil(n_hp / ncols))
@@ -163,7 +163,7 @@ def plot_hparam_sensitivity(results_ok: pd.DataFrame, out_dir: Path):
             sub[hp] = pd.to_numeric(sub[hp], errors="coerce")
             sub["to"] = np.where(
                 sub[lat_c].astype(float) > 1e-9,
-                sub[k4_c].astype(float) / sub[lat_c].astype(float),
+                sub[k7_c].astype(float) / sub[lat_c].astype(float),
                 np.nan,
             )
             g = sub.groupby(hp, as_index=False)["to"].mean().sort_values(hp)
@@ -219,8 +219,8 @@ def main():
         return
 
     lat_c = _pick_col(df_ok, "test_mean_inference_latency_ms", "mean_inference_latency_ms")
-    k4_c = _pick_col(df_ok, "test_success_rate_k4", "success_rate_k4")
-    for c in [k4_c, lat_c, "cfg_idx"]:
+    k7_c = _pick_col(df_ok, "test_p7", "test_all_7_success")
+    for c in [k7_c, lat_c, "cfg_idx"]:
         df_ok[c] = pd.to_numeric(df_ok[c], errors="coerce")
 
     plot_tradeoff_scatter(df_ok, plots)
