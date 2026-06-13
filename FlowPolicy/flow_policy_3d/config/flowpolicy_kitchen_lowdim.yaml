@@ -35,4 +35,6 @@ policy:
     alpha: 1e-5
     num_inference_step: 1
 
-n_action_steps: 8
+horizon: 4
+n_obs_steps: 2
+n_action_steps: 4

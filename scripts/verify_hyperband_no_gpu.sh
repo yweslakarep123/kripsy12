@@ -42,7 +42,7 @@ cfg = {
     "policy.Conditional_ConsistencyFM.num_segments": 2,
     "policy.Conditional_ConsistencyFM.eps": 1e-2,
     "policy.Conditional_ConsistencyFM.delta": 1e-2,
-    "n_action_steps": 8,
+    "n_action_steps": 4,
     "n_obs_steps": 2,
     "policy.diffusion_step_embed_dim": 128,
     "_state_mlp_hidden": 256,

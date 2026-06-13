@@ -142,7 +142,7 @@ def build_train_overrides(
 ) -> List[str]:
     n_obs = int(cfg["n_obs_steps"])
     n_act = int(cfg["n_action_steps"])
-    hz = compute_horizon(n_obs, n_act)
+    hz = int(cfg["horizon"]) if "horizon" in cfg else compute_horizon(n_obs, n_act)
     bs = int(cfg["dataloader.batch_size"])
     robot_noise = 0.1 if profile == "standard" else 0.0
     dataset_dir_resolved = resolve_dataset_dir_for_train(dataset_dir)
